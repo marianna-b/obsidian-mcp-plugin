@@ -1,5 +1,8 @@
 /**
  * Type definitions for Smart Connections integration
+ * 
+ * Adapted from smart-connections-mcp by Daniel Glickman
+ * https://github.com/msdanyg/smart-connections-mcp
  */
 
 export interface SmartSource {

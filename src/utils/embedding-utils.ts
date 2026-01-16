@@ -1,5 +1,8 @@
 /**
  * Embedding utilities for vector similarity calculations
+ * 
+ * Adapted from smart-connections-mcp by Daniel Glickman
+ * https://github.com/msdanyg/smart-connections-mcp
  */
 
 /**

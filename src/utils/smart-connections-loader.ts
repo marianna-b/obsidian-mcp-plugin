@@ -1,6 +1,9 @@
 /**
  * Loader for Smart Connections data from .smart-env directory
  * Uses Obsidian API instead of Node.js fs module
+ * 
+ * Adapted from smart-connections-mcp by Daniel Glickman
+ * https://github.com/msdanyg/smart-connections-mcp
  */
 
 import { App } from 'obsidian';

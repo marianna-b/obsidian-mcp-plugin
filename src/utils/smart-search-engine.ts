@@ -1,5 +1,8 @@
 /**
  * Semantic search engine for Smart Connections
+ * 
+ * Adapted from smart-connections-mcp by Daniel Glickman
+ * https://github.com/msdanyg/smart-connections-mcp
  */
 
 import type { SmartSource, SimilarNote, ConnectionGraph, NoteContent } from '../types/smart-connections';
