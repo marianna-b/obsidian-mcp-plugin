@@ -26,6 +26,9 @@ interface MCPPluginSettings {
 	pathExclusionsEnabled: boolean;
 	enableIgnoreContextMenu: boolean;
 	validation?: Partial<ValidationConfig>;
+	// Smart Connections settings
+	enableSmartConnections: boolean;
+	smartConnectionsAutoReload: boolean;
 }
 
 const DEFAULT_SETTINGS: MCPPluginSettings = {
@@ -56,7 +59,10 @@ const DEFAULT_SETTINGS: MCPPluginSettings = {
 		maxPathLength: 255,
 		maxRegexComplexity: 100,
 		strictMode: false
-	}
+	},
+	// Smart Connections defaults
+	enableSmartConnections: false, // Disabled by default
+	smartConnectionsAutoReload: true // Auto-reload enabled by default
 };
 
 export default class ObsidianMCPPlugin extends Plugin {
