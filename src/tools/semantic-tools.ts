@@ -720,11 +720,13 @@ export async function createSemanticTools(api?: ObsidianAPI, settings?: any): Pr
       // Add tools with handlers attached
       for (const tool of scTools) {
         const handler = scHandlers.get(tool.name);
-        if (handler) {
+        if (handler && tool.description) {
           baseTools.push({
-            ...tool,
+            name: tool.name,
+            description: tool.description,
+            inputSchema: tool.inputSchema as any,
             handler: async (api: ObsidianAPI, args: any) => handler(args)
-          });
+          } as any);
         }
       }
     } catch (error) {

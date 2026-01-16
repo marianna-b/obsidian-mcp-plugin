@@ -1124,8 +1124,11 @@ class MCPSettingTab extends PluginSettingTab {
 					.setButtonText('Open Smart Connections')
 					.onClick(() => {
 						// @ts-ignore - access plugin settings
-						this.app.setting.open();
-						this.app.setting.openTabById('smart-connections');
+						const setting: any = (this.app as any).setting;
+						if (setting) {
+							setting.open();
+							setting.openTabById('smart-connections');
+						}
 					}));
 		}
 	}
