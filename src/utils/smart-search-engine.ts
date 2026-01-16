@@ -175,53 +175,16 @@ export class SmartSearchEngine {
   }
 
   /**
-   * Search notes by keyword matching in full content
-   * Matches Smart Connections MCP implementation:
-   * - Searches full note content (not just paths/headings)
-   * - Uses regex to count keyword occurrences
-   * - Score = min(matches / 10, 1.0)
+   * Semantic search using query embedding
+   * NOT IMPLEMENTED: Requires embedding model to generate query vector
+   * Smart Connections uses HyDE (Hypothetical Document Embeddings) for this
    */
   async searchByQuery(
     queryText: string,
     limit: number = 10,
     threshold: number = 0.5
   ): Promise<SimilarNote[]> {
-    const results: SimilarNote[] = [];
-    const queryLower = queryText.toLowerCase();
-    const queryRegex = new RegExp(queryLower, 'g');
-
-    for (const [path, source] of this.loader.getSources()) {
-      try {
-        // Read full note content and search for keyword matches
-        const content = (await this.loader.readNoteContent(path)).toLowerCase();
-        
-        // Count occurrences using regex (same as Smart Connections)
-        // Reset regex lastIndex to ensure consistent matching
-        queryRegex.lastIndex = 0;
-        const matches = (content.match(queryRegex) || []).length;
-
-        if (matches > 0) {
-          // Normalize score (matches / 10, capped at 1.0)
-          const score = Math.min(matches / 10, 1.0);
-
-          if (score >= threshold) {
-            results.push({
-              path,
-              similarity: score,
-              blocks: Object.keys(source.blocks || {})
-            });
-          }
-        }
-      } catch (error) {
-        // Skip notes that can't be read
-        continue;
-      }
-    }
-
-    // Sort by similarity and limit
-    return results
-      .sort((a, b) => b.similarity - a.similarity)
-      .slice(0, limit);
+    throw new Error('Semantic search not implemented - requires embedding model to embed query text. Use smart_similar_notes instead.');
   }
 
   /**
