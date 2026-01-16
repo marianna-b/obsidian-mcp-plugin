@@ -256,7 +256,7 @@ export const smartConnectionsTools: Tool[] = [
   
   {
     name: 'smart_search_notes',
-    description: '🔍 Search for notes using a text query. Searches at block level (if available) and returns notes ranked by relevance with similarity scores and matched block.',
+    description: '🔍 Search using a text query. Returns individual blocks (if available) or notes ranked by relevance with similarity scores.',
     inputSchema: {
       type: 'object',
       properties: {

@@ -87,6 +87,14 @@ export interface SimilarNote {
   matchedContent?: string;
 }
 
+export interface BlockResult {
+  key: string;  // "path/to/note.md#Heading"
+  path: string;
+  block: string;  // Heading name
+  similarity: number;
+  lines: [number, number];
+}
+
 export interface ConnectionNode {
   root: string;
   path: string;
