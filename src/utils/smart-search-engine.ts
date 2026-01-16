@@ -175,7 +175,7 @@ export class SmartSearchEngine {
   }
 
   /**
-   * Search notes by content similarity
+   * Search notes by keyword matching in path and block headings
    * Note: This is a simple keyword-based search since we don't have
    * an embedding model to generate vectors for arbitrary text
    */
@@ -186,22 +186,38 @@ export class SmartSearchEngine {
   ): SimilarNote[] {
     const results: SimilarNote[] = [];
     const queryLower = queryText.toLowerCase();
+    const queryWords = queryLower.split(/\s+/).filter(w => w.length > 0);
 
     for (const [path, source] of this.loader.getSources()) {
       try {
-        // Simple relevance scoring based on keyword matches
-        // In a full implementation, you'd generate an embedding for the query
-        const matches = (queryLower.match(new RegExp(queryLower, 'gi')) || []).length;
+        const pathLower = path.toLowerCase();
+        const blocks = Object.keys(source.blocks || {});
+        const blocksText = blocks.join(' ').toLowerCase();
+        
+        // Count word matches in path and blocks
+        let matchCount = 0;
+        let totalWords = queryWords.length;
+        
+        for (const word of queryWords) {
+          // Check if word appears in path
+          if (pathLower.includes(word)) {
+            matchCount++;
+          }
+          // Also check in block headings
+          else if (blocksText.includes(word)) {
+            matchCount += 0.5; // Weight block matches lower than path matches
+          }
+        }
 
-        if (matches > 0) {
-          // Normalize score (crude approximation)
-          const score = Math.min(matches / 10, 1.0);
+        if (matchCount > 0) {
+          // Score based on percentage of query words found
+          const score = matchCount / totalWords;
 
           if (score >= threshold) {
             results.push({
               path,
               similarity: score,
-              blocks: Object.keys(source.blocks || {})
+              blocks
             });
           }
         }
