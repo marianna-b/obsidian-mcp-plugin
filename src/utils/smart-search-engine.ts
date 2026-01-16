@@ -175,16 +175,101 @@ export class SmartSearchEngine {
   }
 
   /**
-   * Semantic search using query embedding
-   * NOT IMPLEMENTED: Requires embedding model to generate query vector
-   * Smart Connections uses HyDE (Hypothetical Document Embeddings) for this
+   * Semantic search approximation using keyword match + embedding similarity
+   * Since we don't have the embedding model, we:
+   * 1. Find notes matching query keywords
+   * 2. Compute centroid of their embeddings
+   * 3. Find notes similar to that centroid
    */
   async searchByQuery(
     queryText: string,
     limit: number = 10,
     threshold: number = 0.5
   ): Promise<SimilarNote[]> {
-    throw new Error('Semantic search not implemented - requires embedding model to embed query text. Use smart_similar_notes instead.');
+    const queryLower = queryText.toLowerCase();
+    
+    // Step 1: Find notes that contain the query keywords
+    const keywordMatches: Array<{path: string, source: any, matchScore: number}> = [];
+    
+    for (const [path, source] of this.loader.getSources()) {
+      try {
+        const content = (await this.loader.readNoteContent(path)).toLowerCase();
+        const pathLower = path.toLowerCase();
+        
+        // Count keyword occurrences
+        const contentMatches = (content.match(new RegExp(queryLower, 'g')) || []).length;
+        const pathMatches = (pathLower.match(new RegExp(queryLower, 'g')) || []).length;
+        
+        if (contentMatches > 0 || pathMatches > 0) {
+          keywordMatches.push({
+            path,
+            source,
+            matchScore: contentMatches + (pathMatches * 2) // Weight path matches higher
+          });
+        }
+      } catch (error) {
+        continue;
+      }
+    }
+    
+    // If no keyword matches, return empty
+    if (keywordMatches.length === 0) {
+      return [];
+    }
+    
+    // Step 2: Get embeddings of top keyword matches and compute centroid
+    const topMatches = keywordMatches
+      .sort((a, b) => b.matchScore - a.matchScore)
+      .slice(0, 5); // Use top 5 for centroid
+    
+    const embeddings: number[][] = [];
+    for (const match of topMatches) {
+      const emb = match.source.embeddings[this.embeddingModelKey];
+      if (emb?.vec && emb.vec.length > 0) {
+        embeddings.push(emb.vec);
+      }
+    }
+    
+    if (embeddings.length === 0) {
+      // Fall back to keyword-based scoring
+      return keywordMatches
+        .sort((a, b) => b.matchScore - a.matchScore)
+        .slice(0, limit)
+        .map(m => ({
+          path: m.path,
+          similarity: Math.min(m.matchScore / 10, 1.0),
+          blocks: Object.keys(m.source.blocks || {})
+        }));
+    }
+    
+    // Compute centroid (average of embeddings)
+    const centroid = this.computeCentroid(embeddings);
+    
+    // Step 3: Find notes similar to the centroid
+    return this.getEmbeddingNeighbors(centroid, limit, threshold);
+  }
+  
+  /**
+   * Compute centroid (mean) of embedding vectors
+   */
+  private computeCentroid(embeddings: number[][]): number[] {
+    if (embeddings.length === 0) return [];
+    
+    const dimensions = embeddings[0].length;
+    const centroid = new Array(dimensions).fill(0);
+    
+    for (const embedding of embeddings) {
+      for (let i = 0; i < dimensions; i++) {
+        centroid[i] += embedding[i];
+      }
+    }
+    
+    // Average
+    for (let i = 0; i < dimensions; i++) {
+      centroid[i] /= embeddings.length;
+    }
+    
+    return centroid;
   }
 
   /**
