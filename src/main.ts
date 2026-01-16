@@ -540,6 +540,9 @@ class MCPSettingTab extends PluginSettingTab {
 		// Security Section
 		this.createSecuritySection(containerEl);
 		
+		// Smart Connections Section
+		this.createSmartConnectionsSection(containerEl);
+		
 		// UI Options Section
 		this.createUIOptionsSection(containerEl);
 		
@@ -983,6 +986,164 @@ class MCPSettingTab extends PluginSettingTab {
 		// Show file management options if path exclusions are enabled
 		if (this.plugin.settings.pathExclusionsEnabled) {
 			this.createPathExclusionManagement(containerEl);
+		}
+	}
+
+	private async createSmartConnectionsSection(containerEl: HTMLElement): Promise<void> {
+		containerEl.createEl('h3', {text: 'Smart Connections Integration'});
+		
+		// Check if Smart Connections plugin is installed
+		const hasPlugin = this.checkSmartConnectionsPlugin();
+		const hasData = await this.checkSmartConnectionsData();
+		
+		// Status indicator
+		const statusEl = containerEl.createDiv('mcp-status-section');
+		if (!hasPlugin) {
+			statusEl.createEl('p', {
+				text: '⚠️ Smart Connections plugin not detected',
+				cls: 'setting-item-description mod-warning'
+			});
+		} else if (!hasData) {
+			statusEl.createEl('p', {
+				text: '⚠️ Smart Connections plugin detected, but embeddings not found. Generate embeddings in Smart Connections settings.',
+				cls: 'setting-item-description mod-warning'
+			});
+		} else {
+			statusEl.createEl('p', {
+				text: '✅ Smart Connections embeddings found',
+				cls: 'setting-item-description mcp-security-note'
+			});
+		}
+		
+		new Setting(containerEl)
+			.setName('Enable Smart Connections tools')
+			.setDesc('Provide 6 additional MCP tools for semantic search using Smart Connections embeddings')
+			.addToggle(toggle => toggle
+				.setValue(this.plugin.settings.enableSmartConnections)
+				.setDisabled(!hasData)
+				.onChange(async (value) => {
+					this.plugin.settings.enableSmartConnections = value;
+					await this.plugin.saveSettings();
+					
+					new Notice(
+						value 
+							? 'Smart Connections tools enabled. Restarting MCP server...' 
+							: 'Smart Connections tools disabled. Restarting MCP server...'
+					);
+					
+					await this.plugin.stopMCPServer();
+					if (this.plugin.settings.httpEnabled || this.plugin.settings.httpsEnabled) {
+						await this.plugin.startMCPServer();
+					}
+					
+					// Refresh display
+					this.display();
+				}));
+		
+		// Show additional settings if Smart Connections is enabled
+		if (this.plugin.settings.enableSmartConnections && hasData) {
+			new Setting(containerEl)
+				.setName('Auto-reload on embedding updates')
+				.setDesc('Automatically check for and reload embeddings when Smart Connections regenerates them')
+				.addToggle(toggle => toggle
+					.setValue(this.plugin.settings.smartConnectionsAutoReload)
+					.onChange(async (value) => {
+						this.plugin.settings.smartConnectionsAutoReload = value;
+						await this.plugin.saveSettings();
+						
+						// Restart periodic refresh with new settings
+						if (value) {
+							try {
+								const { startPeriodicRefresh } = await import('./tools/smart-connections-tools.js');
+								startPeriodicRefresh(this.app, this.plugin.settings.smartConnectionsRefreshInterval);
+								new Notice(`Smart Connections: Periodic refresh enabled (every ${this.plugin.settings.smartConnectionsRefreshInterval} minutes)`);
+							} catch (error) {
+								Debug.error('Failed to start periodic refresh:', error);
+							}
+						} else {
+							try {
+								const { stopPeriodicRefresh } = await import('./tools/smart-connections-tools.js');
+								stopPeriodicRefresh();
+								new Notice('Smart Connections: Periodic refresh disabled');
+							} catch (error) {
+								Debug.error('Failed to stop periodic refresh:', error);
+							}
+						}
+					}));
+			
+			if (this.plugin.settings.smartConnectionsAutoReload) {
+				new Setting(containerEl)
+					.setName('Refresh interval')
+					.setDesc('How often to check for embedding updates (in minutes)')
+					.addDropdown(dropdown => dropdown
+						.addOption('5', '5 minutes')
+						.addOption('15', '15 minutes (recommended)')
+						.addOption('30', '30 minutes')
+						.addOption('60', '60 minutes')
+						.setValue(this.plugin.settings.smartConnectionsRefreshInterval.toString())
+						.onChange(async (value) => {
+							const interval = parseInt(value);
+							this.plugin.settings.smartConnectionsRefreshInterval = interval;
+							await this.plugin.saveSettings();
+							
+							// Restart periodic refresh with new interval
+							try {
+								const { startPeriodicRefresh } = await import('./tools/smart-connections-tools.js');
+								startPeriodicRefresh(this.app, interval);
+								new Notice(`Smart Connections: Refresh interval updated to ${interval} minutes`);
+							} catch (error) {
+								Debug.error('Failed to restart periodic refresh:', error);
+							}
+						}));
+			}
+			
+			// Manual reload button
+			const reloadSetting = new Setting(containerEl)
+				.setName('Manual reload')
+				.setDesc('Manually reload Smart Connections embeddings cache')
+				.addButton(button => button
+					.setButtonText('Reload Now')
+					.onClick(async () => {
+						try {
+							const { clearSmartConnectionsCache } = await import('./tools/smart-connections-tools.js');
+							clearSmartConnectionsCache(this.app);
+							new Notice('Smart Connections cache cleared. Will reload on next use.');
+						} catch (error) {
+							Debug.error('Failed to clear cache:', error);
+							new Notice('Failed to clear cache');
+						}
+					}));
+		}
+		
+		// Add helper button if plugin is detected but no data
+		if (hasPlugin && !hasData) {
+			new Setting(containerEl)
+				.setName('Generate embeddings')
+				.setDesc('Open Smart Connections settings to generate embeddings')
+				.addButton(button => button
+					.setButtonText('Open Smart Connections')
+					.onClick(() => {
+						// @ts-ignore - access plugin settings
+						this.app.setting.open();
+						this.app.setting.openTabById('smart-connections');
+					}));
+		}
+	}
+	
+	private checkSmartConnectionsPlugin(): boolean {
+		// @ts-ignore - access plugins
+		const plugins = this.app.plugins?.plugins || {};
+		return !!plugins['smart-connections'];
+	}
+	
+	private async checkSmartConnectionsData(): Promise<boolean> {
+		const adapter = this.app.vault.adapter;
+		try {
+			const configExists = await adapter.exists('.smart-env/smart_env.json');
+			const multiExists = await adapter.exists('.smart-env/multi');
+			return configExists && multiExists;
+		} catch {
+			return false;
 		}
 	}
 
