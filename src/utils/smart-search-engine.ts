@@ -188,6 +188,7 @@ export class SmartSearchEngine {
   ): Promise<SimilarNote[]> {
     const results: SimilarNote[] = [];
     const queryLower = queryText.toLowerCase();
+    const queryRegex = new RegExp(queryLower, 'g');
 
     for (const [path, source] of this.loader.getSources()) {
       try {
@@ -195,7 +196,9 @@ export class SmartSearchEngine {
         const content = (await this.loader.readNoteContent(path)).toLowerCase();
         
         // Count occurrences using regex (same as Smart Connections)
-        const matches = (content.match(new RegExp(queryLower, 'gi')) || []).length;
+        // Reset regex lastIndex to ensure consistent matching
+        queryRegex.lastIndex = 0;
+        const matches = (content.match(queryRegex) || []).length;
 
         if (matches > 0) {
           // Normalize score (matches / 10, capped at 1.0)
