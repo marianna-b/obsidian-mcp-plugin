@@ -175,80 +175,30 @@ export class SmartSearchEngine {
   }
 
   /**
-   * Semantic search approximation using keyword match + embedding similarity
-   * Since we don't have the embedding model, we:
-   * 1. Find notes matching query keywords
-   * 2. Compute centroid of their embeddings
-   * 3. Find notes similar to that centroid
+   * Semantic search by embedding the query text
+   * Uses Smart Connections' loaded embedding model if available
    */
   async searchByQuery(
     queryText: string,
     limit: number = 10,
     threshold: number = 0.5
   ): Promise<SimilarNote[]> {
-    const queryLower = queryText.toLowerCase();
-    // Escape special regex characters
-    const escapedQuery = queryLower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    // Try to get the embedding model from Smart Connections
+    const embedModel = this.getSmartConnectionsEmbedModel();
     
-    // Step 1: Find notes that contain the query keywords
-    const keywordMatches: Array<{path: string, source: any, matchScore: number}> = [];
-    
-    for (const [path, source] of this.loader.getSources()) {
-      try {
-        const content = (await this.loader.readNoteContent(path)).toLowerCase();
-        const pathLower = path.toLowerCase();
-        
-        // Count keyword occurrences
-        const contentMatches = (content.match(new RegExp(escapedQuery, 'g')) || []).length;
-        const pathMatches = (pathLower.match(new RegExp(escapedQuery, 'g')) || []).length;
-        
-        if (contentMatches > 0 || pathMatches > 0) {
-          keywordMatches.push({
-            path,
-            source,
-            matchScore: contentMatches + (pathMatches * 2) // Weight path matches higher
-          });
-        }
-      } catch (error) {
-        continue;
-      }
+    if (!embedModel) {
+      throw new Error('Smart Connections embedding model not available. Make sure Smart Connections plugin is installed and enabled.');
     }
     
-    // If no keyword matches, return empty
-    if (keywordMatches.length === 0) {
-      return [];
+    // Embed the query text
+    const queryEmbedding = await this.embedQuery(embedModel, queryText);
+    
+    if (!queryEmbedding || queryEmbedding.length === 0) {
+      throw new Error('Failed to embed query text');
     }
     
-    // Step 2: Get embeddings of top keyword matches and compute centroid
-    const topMatches = keywordMatches
-      .sort((a, b) => b.matchScore - a.matchScore)
-      .slice(0, 5); // Use top 5 for centroid
-    
-    const embeddings: number[][] = [];
-    for (const match of topMatches) {
-      const emb = match.source.embeddings[this.embeddingModelKey];
-      if (emb?.vec && emb.vec.length > 0) {
-        embeddings.push(emb.vec);
-      }
-    }
-    
-    if (embeddings.length === 0) {
-      // Fall back to keyword-based scoring
-      return keywordMatches
-        .sort((a, b) => b.matchScore - a.matchScore)
-        .slice(0, limit)
-        .map(m => ({
-          path: m.path,
-          similarity: Math.min(m.matchScore / 10, 1.0),
-          blocks: Object.keys(m.source.blocks || {})
-        }));
-    }
-    
-    // Compute centroid (average of embeddings)
-    const centroid = this.computeCentroid(embeddings);
-    
-    // Step 3: Find notes similar to the centroid and deduplicate
-    const results = this.getEmbeddingNeighbors(centroid, limit * 2, threshold);
+    // Find notes similar to the query embedding
+    const results = this.getEmbeddingNeighbors(queryEmbedding, limit * 2, threshold);
     
     // Deduplicate by path (case-insensitive)
     const seen = new Map<string, SimilarNote>();
@@ -265,27 +215,40 @@ export class SmartSearchEngine {
   }
   
   /**
-   * Compute centroid (mean) of embedding vectors
+   * Get Smart Connections' embedding model from the global environment
    */
-  private computeCentroid(embeddings: number[][]): number[] {
-    if (embeddings.length === 0) return [];
-    
-    const dimensions = embeddings[0].length;
-    const centroid = new Array(dimensions).fill(0);
-    
-    for (const embedding of embeddings) {
-      for (let i = 0; i < dimensions; i++) {
-        centroid[i] += embedding[i];
-      }
-    }
-    
-    // Average
-    for (let i = 0; i < dimensions; i++) {
-      centroid[i] /= embeddings.length;
-    }
-    
-    return centroid;
+  private getSmartConnectionsEmbedModel(): any {
+    // Check for Smart Connections' global smart_env
+    const win = window as any;
+    return win.smart_env?.smart_sources?.embed_model ||
+           win.smart_env?.embedding_models?.default?.instance ||
+           null;
   }
+  
+  /**
+   * Embed query text using Smart Connections' model
+   */
+  private async embedQuery(model: any, text: string): Promise<number[]> {
+    try {
+      // Smart Connections embed_model has an embed_batch method
+      if (typeof model.embed_batch === 'function') {
+        const results = await model.embed_batch([{ embed_input: text }]);
+        return results[0]?.vec || [];
+      }
+      
+      // Fallback: try embed method
+      if (typeof model.embed === 'function') {
+        const result = await model.embed(text);
+        return result?.vec || result || [];
+      }
+      
+      throw new Error('Embedding model does not have embed_batch or embed method');
+    } catch (error) {
+      console.error('Error embedding query:', error);
+      throw error;
+    }
+  }
+  
 
   /**
    * Get note content with matched blocks highlighted
