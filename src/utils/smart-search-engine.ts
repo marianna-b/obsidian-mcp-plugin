@@ -187,6 +187,8 @@ export class SmartSearchEngine {
     threshold: number = 0.5
   ): Promise<SimilarNote[]> {
     const queryLower = queryText.toLowerCase();
+    // Escape special regex characters
+    const escapedQuery = queryLower.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     
     // Step 1: Find notes that contain the query keywords
     const keywordMatches: Array<{path: string, source: any, matchScore: number}> = [];
@@ -197,8 +199,8 @@ export class SmartSearchEngine {
         const pathLower = path.toLowerCase();
         
         // Count keyword occurrences
-        const contentMatches = (content.match(new RegExp(queryLower, 'g')) || []).length;
-        const pathMatches = (pathLower.match(new RegExp(queryLower, 'g')) || []).length;
+        const contentMatches = (content.match(new RegExp(escapedQuery, 'g')) || []).length;
+        const pathMatches = (pathLower.match(new RegExp(escapedQuery, 'g')) || []).length;
         
         if (contentMatches > 0 || pathMatches > 0) {
           keywordMatches.push({
@@ -245,8 +247,21 @@ export class SmartSearchEngine {
     // Compute centroid (average of embeddings)
     const centroid = this.computeCentroid(embeddings);
     
-    // Step 3: Find notes similar to the centroid
-    return this.getEmbeddingNeighbors(centroid, limit, threshold);
+    // Step 3: Find notes similar to the centroid and deduplicate
+    const results = this.getEmbeddingNeighbors(centroid, limit * 2, threshold);
+    
+    // Deduplicate by path (case-insensitive)
+    const seen = new Map<string, SimilarNote>();
+    for (const result of results) {
+      const normalizedPath = result.path.toLowerCase();
+      if (!seen.has(normalizedPath) || result.similarity > seen.get(normalizedPath)!.similarity) {
+        seen.set(normalizedPath, result);
+      }
+    }
+    
+    return Array.from(seen.values())
+      .sort((a, b) => b.similarity - a.similarity)
+      .slice(0, limit);
   }
   
   /**
