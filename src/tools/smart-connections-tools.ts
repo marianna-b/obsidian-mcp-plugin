@@ -13,22 +13,153 @@ import { Debug } from '../utils/debug';
 import type { Tool } from '@modelcontextprotocol/sdk/types.js';
 
 /**
- * Lazy-initialized search engine singleton per API instance
+ * Cache for search engine instances with metadata
  */
 const searchEngineCache = new WeakMap<App, SmartSearchEngine>();
+const cacheMetadata = new WeakMap<App, {
+  loadedAt: number;
+  configMtime: number;
+}>();
 
+// Throttle on-demand checks to max once per minute (for tool calls)
+const DEMAND_CHECK_THROTTLE = 60 * 1000; // 1 minute
+const lastDemandCheck = new WeakMap<App, number>();
+
+// Periodic refresh interval (set by user, checked in background)
+let refreshInterval: NodeJS.Timeout | null = null;
+let currentApp: App | null = null;
+
+/**
+ * Clear the search engine cache (manual reload)
+ */
+export function clearSmartConnectionsCache(app: App): void {
+  if (searchEngineCache.has(app)) {
+    searchEngineCache.delete(app);
+    cacheMetadata.delete(app);
+    lastDemandCheck.delete(app);
+    Debug.log('🔄 Smart Connections cache cleared');
+  }
+}
+
+/**
+ * Check if Smart Connections data has changed (lightweight - only checks config mtime)
+ */
+async function hasEmbeddingsChanged(app: App): Promise<boolean> {
+  const metadata = cacheMetadata.get(app);
+  if (!metadata) return true; // No cache, needs load
+  
+  try {
+    // Only stat the config file - much faster than checking all .ajson files
+    const configStat = await app.vault.adapter.stat('.smart-env/smart_env.json');
+    const currentMtime = configStat?.mtime || 0;
+    
+    if (currentMtime > metadata.configMtime) {
+      Debug.log('📝 Smart Connections data changed (config mtime updated)');
+      return true;
+    }
+  } catch (error) {
+    // If we can't check, assume no change (fail-safe)
+    return false;
+  }
+  
+  return false;
+}
+
+/**
+ * Load or reload the search engine
+ */
+async function loadSearchEngine(app: App): Promise<SmartSearchEngine> {
+  Debug.log('🔄 Loading Smart Connections data...');
+  
+  const loader = new SmartConnectionsLoader(app);
+  await loader.initialize();
+  const engine = new SmartSearchEngine(loader);
+  
+  // Cache the engine
+  searchEngineCache.set(app, engine);
+  
+  // Store metadata for future change detection
+  try {
+    const configStat = await app.vault.adapter.stat('.smart-env/smart_env.json');
+    cacheMetadata.set(app, {
+      loadedAt: Date.now(),
+      configMtime: configStat?.mtime || 0
+    });
+  } catch {
+    cacheMetadata.set(app, {
+      loadedAt: Date.now(),
+      configMtime: 0
+    });
+  }
+  
+  Debug.log('✅ Smart Connections search engine ready');
+  return engine;
+}
+
+/**
+ * Get search engine with lazy validation (throttled)
+ * This is called on every tool invocation
+ */
 async function getSearchEngine(api: ObsidianAPI): Promise<SmartSearchEngine> {
   const app = api.getApp();
   
+  // If no cache, load immediately
   if (!searchEngineCache.has(app)) {
-    const loader = new SmartConnectionsLoader(app);
-    await loader.initialize();
-    const engine = new SmartSearchEngine(loader);
-    searchEngineCache.set(app, engine);
-    Debug.log('🧠 Smart Connections search engine initialized');
+    return await loadSearchEngine(app);
   }
   
+  // Throttled check: only validate once per minute per tool call
+  const now = Date.now();
+  const lastCheck = lastDemandCheck.get(app) || 0;
+  
+  if (now - lastCheck >= DEMAND_CHECK_THROTTLE) {
+    lastDemandCheck.set(app, now);
+    
+    // Quick check if data changed
+    if (await hasEmbeddingsChanged(app)) {
+      return await loadSearchEngine(app);
+    }
+  }
+  
+  // Return cached engine
   return searchEngineCache.get(app)!;
+}
+
+/**
+ * Start periodic refresh timer (background)
+ */
+export function startPeriodicRefresh(app: App, intervalMinutes: number): void {
+  stopPeriodicRefresh();
+  
+  currentApp = app;
+  const intervalMs = intervalMinutes * 60 * 1000;
+  
+  Debug.log(`⏰ Smart Connections periodic refresh started (every ${intervalMinutes} min)`);
+  
+  refreshInterval = setInterval(async () => {
+    if (!currentApp) return;
+    
+    try {
+      if (await hasEmbeddingsChanged(currentApp)) {
+        Debug.log('🔄 Periodic check: embeddings changed, reloading...');
+        await loadSearchEngine(currentApp);
+      }
+    } catch (error) {
+      Debug.error('Error in periodic Smart Connections refresh:', error);
+    }
+  }, intervalMs);
+}
+
+/**
+ * Stop periodic refresh timer
+ */
+export function stopPeriodicRefresh(): void {
+  if (refreshInterval) {
+    clearInterval(refreshInterval);
+    refreshInterval = null;
+    currentApp = null;
+    Debug.log('⏸️ Smart Connections periodic refresh stopped');
+  }
 }
 
 /**

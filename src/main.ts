@@ -29,6 +29,7 @@ interface MCPPluginSettings {
 	// Smart Connections settings
 	enableSmartConnections: boolean;
 	smartConnectionsAutoReload: boolean;
+	smartConnectionsRefreshInterval: number; // Minutes: 5, 15, 30, 60
 }
 
 const DEFAULT_SETTINGS: MCPPluginSettings = {
@@ -62,7 +63,8 @@ const DEFAULT_SETTINGS: MCPPluginSettings = {
 	},
 	// Smart Connections defaults
 	enableSmartConnections: false, // Disabled by default
-	smartConnectionsAutoReload: true // Auto-reload enabled by default
+	smartConnectionsAutoReload: true, // Auto-reload enabled by default
+	smartConnectionsRefreshInterval: 15 // Check every 15 minutes by default
 };
 
 export default class ObsidianMCPPlugin extends Plugin {
