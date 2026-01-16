@@ -376,7 +376,7 @@ export function createSmartConnectionsToolHandlers(api: ObsidianAPI): Map<string
   handlers.set('smart_search_notes', async (args: any) => {
     const engine = await getSearchEngine(api);
     const { query, limit = 10, threshold = 0.5 } = args;
-    const results = engine.searchByQuery(query, limit, threshold);
+    const results = await engine.searchByQuery(query, limit, threshold);
     
     return {
       content: [{

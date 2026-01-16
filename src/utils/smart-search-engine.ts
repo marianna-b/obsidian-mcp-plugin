@@ -175,54 +175,42 @@ export class SmartSearchEngine {
   }
 
   /**
-   * Search notes by keyword matching in path and block headings
-   * Note: This is a simple keyword-based search since we don't have
-   * an embedding model to generate vectors for arbitrary text
+   * Search notes by keyword matching in full content
+   * Matches Smart Connections MCP implementation:
+   * - Searches full note content (not just paths/headings)
+   * - Uses regex to count keyword occurrences
+   * - Score = min(matches / 10, 1.0)
    */
-  searchByQuery(
+  async searchByQuery(
     queryText: string,
     limit: number = 10,
     threshold: number = 0.5
-  ): SimilarNote[] {
+  ): Promise<SimilarNote[]> {
     const results: SimilarNote[] = [];
     const queryLower = queryText.toLowerCase();
-    const queryWords = queryLower.split(/\s+/).filter(w => w.length > 0);
 
     for (const [path, source] of this.loader.getSources()) {
       try {
-        const pathLower = path.toLowerCase();
-        const blocks = Object.keys(source.blocks || {});
-        const blocksText = blocks.join(' ').toLowerCase();
+        // Read full note content and search for keyword matches
+        const content = (await this.loader.readNoteContent(path)).toLowerCase();
         
-        // Count word matches in path and blocks
-        let matchCount = 0;
-        let totalWords = queryWords.length;
-        
-        for (const word of queryWords) {
-          // Check if word appears in path
-          if (pathLower.includes(word)) {
-            matchCount++;
-          }
-          // Also check in block headings
-          else if (blocksText.includes(word)) {
-            matchCount += 0.5; // Weight block matches lower than path matches
-          }
-        }
+        // Count occurrences using regex (same as Smart Connections)
+        const matches = (content.match(new RegExp(queryLower, 'gi')) || []).length;
 
-        if (matchCount > 0) {
-          // Score based on percentage of query words found
-          const score = matchCount / totalWords;
+        if (matches > 0) {
+          // Normalize score (matches / 10, capped at 1.0)
+          const score = Math.min(matches / 10, 1.0);
 
           if (score >= threshold) {
             results.push({
               path,
               similarity: score,
-              blocks
+              blocks: Object.keys(source.blocks || {})
             });
           }
         }
       } catch (error) {
-        // Skip notes that can't be processed
+        // Skip notes that can't be read
         continue;
       }
     }

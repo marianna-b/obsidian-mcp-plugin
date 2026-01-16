@@ -188,6 +188,7 @@ export class SmartConnectionsLoader {
     return await adapter.read(notePath);
   }
 
+
   /**
    * Extract content for specific blocks/sections
    */
