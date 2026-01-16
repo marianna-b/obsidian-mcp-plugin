@@ -197,8 +197,11 @@ export class SmartSearchEngine {
       throw new Error('Failed to embed query text');
     }
     
+    // Cap at 50 to prevent large responses
+    const maxResults = Math.min(limit * 2, 50);
+    
     // Find notes similar to the query embedding
-    const results = this.getEmbeddingNeighbors(queryEmbedding, limit * 2, threshold);
+    const results = this.getEmbeddingNeighbors(queryEmbedding, maxResults, threshold);
     
     // Deduplicate by path (case-insensitive)
     const seen = new Map<string, SimilarNote>();
