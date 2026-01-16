@@ -19,6 +19,26 @@ export class SmartSearchEngine {
   }
 
   /**
+   * Validate search parameters
+   */
+  private validateParams(limit: number, threshold: number): void {
+    if (!Number.isFinite(limit) || limit < 1) {
+      throw new Error(`Invalid limit: ${limit}. Must be a positive number.`);
+    }
+    if (!Number.isFinite(threshold) || threshold < 0 || threshold > 1) {
+      throw new Error(`Invalid threshold: ${threshold}. Must be between 0 and 1.`);
+    }
+  }
+
+  /**
+   * Normalize path for consistent case handling
+   */
+  private normalizePath(path: string): string {
+    // Preserve original path but use lowercase for comparison
+    return path;
+  }
+
+  /**
    * Find similar notes to a given note path
    */
   getSimilarNotes(
@@ -26,6 +46,8 @@ export class SmartSearchEngine {
     threshold: number = 0.5,
     limit: number = 10
   ): SimilarNote[] {
+    this.validateParams(limit, threshold);
+    
     const source = this.loader.getSource(notePath);
 
     if (!source) {
@@ -78,6 +100,8 @@ export class SmartSearchEngine {
     k: number = 10,
     threshold: number = 0.5
   ): SimilarNote[] {
+    this.validateParams(k, threshold);
+    
     // Build vector dataset from all sources
     const vectors = Array.from(this.loader.getSources().entries())
       .map(([path, src]) => {
@@ -118,6 +142,12 @@ export class SmartSearchEngine {
     threshold: number = 0.6,
     maxPerLevel: number = 5
   ): ConnectionGraph {
+    this.validateParams(maxPerLevel, threshold);
+    
+    if (!Number.isFinite(depth) || depth < 1) {
+      throw new Error(`Invalid depth: ${depth}. Must be a positive number.`);
+    }
+    
     const visited = new Set<string>();
     const flatConnections: Array<{ path: string; depth: number; similarity: number }> = [];
 
@@ -184,6 +214,12 @@ export class SmartSearchEngine {
     limit: number = 10,
     threshold: number = 0.5
   ): Promise<BlockResult[] | SimilarNote[]> {
+    this.validateParams(limit, threshold);
+    
+    if (!queryText || typeof queryText !== 'string' || queryText.trim().length === 0) {
+      throw new Error('Invalid query: query text must be a non-empty string.');
+    }
+    
     // Try to get the embedding model from Smart Connections
     const embedModel = this.getSmartConnectionsEmbedModel();
     
@@ -229,14 +265,25 @@ export class SmartSearchEngine {
         threshold
       );
       
-      // Return block results directly
-      return neighbors.map(neighbor => ({
-        key: neighbor.id,
-        path: neighbor.metadata.path,
-        block: neighbor.metadata.block,
-        similarity: neighbor.similarity,
-        lines: neighbor.metadata.lines
-      }));
+      // Deduplicate by normalized key (case-insensitive)
+      const seen = new Map<string, BlockResult>();
+      for (const neighbor of neighbors) {
+        const normalizedKey = neighbor.id.toLowerCase();
+        
+        if (!seen.has(normalizedKey) || neighbor.similarity > seen.get(normalizedKey)!.similarity) {
+          seen.set(normalizedKey, {
+            key: neighbor.id,
+            path: neighbor.metadata.path,
+            block: neighbor.metadata.block,
+            similarity: neighbor.similarity,
+            lines: neighbor.metadata.lines
+          });
+        }
+      }
+      
+      return Array.from(seen.values())
+        .sort((a, b) => b.similarity - a.similarity)
+        .slice(0, limit);
     } else {
       // Fall back to note-level search
       const results = this.getEmbeddingNeighbors(queryEmbedding, maxResults, threshold);
