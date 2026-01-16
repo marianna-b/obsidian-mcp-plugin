@@ -120,7 +120,7 @@ export class MCPServerPool extends EventEmitter {
 
     // Register tools handler
     server.setRequestHandler(ListToolsRequestSchema, async () => {
-      const availableTools = createSemanticTools(this.obsidianAPI);
+      const availableTools = await createSemanticTools(this.obsidianAPI, this.plugin?.settings);
       return {
         tools: availableTools.map(tool => ({
           name: tool.name,
@@ -134,7 +134,7 @@ export class MCPServerPool extends EventEmitter {
     server.setRequestHandler(CallToolRequestSchema, async (request): Promise<CallToolResult> => {
       const { name, arguments: args } = request.params;
       
-      const availableTools = createSemanticTools(this.obsidianAPI);
+      const availableTools = await createSemanticTools(this.obsidianAPI, this.plugin?.settings);
       const tool = availableTools.find(t => t.name === name);
       if (!tool) {
         throw new Error(`Tool not found: ${name}`);

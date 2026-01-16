@@ -693,9 +693,9 @@ function getParametersForOperation(operation: string): Record<string, any> {
 }
 
 /**
- * Create semantic tools array with optional Dataview support
+ * Create semantic tools array with optional Dataview and Smart Connections support
  */
-export function createSemanticTools(api?: ObsidianAPI): any[] {
+export async function createSemanticTools(api?: ObsidianAPI, settings?: any): Promise<any[]> {
   const baseTools = [
     createSemanticTool('vault'),
     createSemanticTool('edit'),
@@ -709,6 +709,28 @@ export function createSemanticTools(api?: ObsidianAPI): any[] {
   // Add Dataview tool if available
   if (api && isDataviewToolAvailable(api)) {
     baseTools.push(createSemanticTool('dataview'));
+  }
+  
+  // Add Smart Connections tools if enabled and available
+  if (api && settings) {
+    try {
+      const { createSmartConnectionsTools } = await import('./smart-connections-tools.js');
+      const { tools: scTools, handlers: scHandlers } = await createSmartConnectionsTools(api, settings);
+      
+      // Add tools with handlers attached
+      for (const tool of scTools) {
+        const handler = scHandlers.get(tool.name);
+        if (handler) {
+          baseTools.push({
+            ...tool,
+            handler: async (api: ObsidianAPI, args: any) => handler(args)
+          });
+        }
+      }
+    } catch (error) {
+      // Smart Connections tools are optional, continue without them
+      Debug.error('Failed to load Smart Connections tools:', error);
+    }
   }
 
   return baseTools;

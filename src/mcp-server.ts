@@ -203,9 +203,9 @@ export class MCPHttpServer {
     if (!this.mcpServer) return;
     
     // Register semantic tools following the proven pattern from obsidian-semantic-mcp
-    // Use dynamic tool creation to include Dataview if available
+    // Use dynamic tool creation to include Dataview and Smart Connections if available
     this.mcpServer.setRequestHandler(ListToolsRequestSchema, async () => {
-      const availableTools = createSemanticTools(this.obsidianAPI);
+      const availableTools = await createSemanticTools(this.obsidianAPI, this.plugin?.settings);
       return {
         tools: availableTools.map(tool => ({
           name: tool.name,
@@ -219,7 +219,7 @@ export class MCPHttpServer {
     this.mcpServer.setRequestHandler(CallToolRequestSchema, async (request, context): Promise<CallToolResult> => {
       const { name, arguments: args } = request.params;
       
-      const availableTools = createSemanticTools(this.obsidianAPI);
+      const availableTools = await createSemanticTools(this.obsidianAPI, this.plugin?.settings);
       const tool = availableTools.find(t => t.name === name);
       if (!tool) {
         throw new Error(`Tool not found: ${name}`);
