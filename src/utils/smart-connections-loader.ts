@@ -7,13 +7,14 @@
  */
 
 import { App } from 'obsidian';
-import type { SmartSource, SmartEnvConfig } from '../types/smart-connections';
+import type { SmartSource, SmartBlock, SmartEnvConfig } from '../types/smart-connections';
 import { Debug } from './debug';
 
 export class SmartConnectionsLoader {
   private app: App;
   private config: SmartEnvConfig | null = null;
   private sources: Map<string, SmartSource> = new Map();
+  private blocks: Map<string, SmartBlock> = new Map();
   private smartEnvPath: string = '.smart-env';
 
   constructor(app: App) {
@@ -97,7 +98,14 @@ export class SmartConnectionsLoader {
                 const sourceData: SmartSource = obj[key];
                 // Skip entries with null/undefined paths
                 if (sourceData && sourceData.path) {
-                  this.sources.set(sourceData.path, sourceData);
+                  // Verify the file actually exists before adding to cache
+                  // This filters out stale embeddings from moved/deleted files
+                  const fileExists = await adapter.exists(sourceData.path);
+                  if (fileExists) {
+                    this.sources.set(sourceData.path, sourceData);
+                  } else {
+                    Debug.log(`⚠️ Skipping stale embedding for non-existent file: ${sourceData.path}`);
+                  }
                 }
               }
             }

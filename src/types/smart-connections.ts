@@ -32,6 +32,27 @@ export interface SmartSource {
   };
 }
 
+export interface SmartBlock {
+  path: string | null;  // null for blocks
+  key: string;  // e.g., "path/to/note.md#Heading"
+  embeddings: {
+    [modelKey: string]: {
+      vec: number[];
+      last_embed: {
+        hash: string;
+        tokens: number;
+      };
+    };
+  };
+  last_read: {
+    hash: string;
+    at: number;
+  };
+  class_name: string;
+  lines: [number, number];  // [start_line, end_line]
+  size: number;
+}
+
 export interface SmartEnvConfig {
   is_obsidian_vault: boolean;
   smart_blocks: {
@@ -62,6 +83,7 @@ export interface SimilarNote {
   path: string;
   similarity: number;
   blocks?: string[];
+  matchedBlock?: string;  // The specific block that matched (for block-level search)
   matchedContent?: string;
 }
 
