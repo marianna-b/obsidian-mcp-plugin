@@ -518,7 +518,7 @@ class MCPSettingTab extends PluginSettingTab {
 		this.plugin = plugin;
 	}
 
-	display(): void {
+	async display(): Promise<void> {
 		const {containerEl} = this;
 
 		containerEl.empty();
@@ -541,7 +541,7 @@ class MCPSettingTab extends PluginSettingTab {
 		this.createSecuritySection(containerEl);
 		
 		// Smart Connections Section
-		this.createSmartConnectionsSection(containerEl);
+		await this.createSmartConnectionsSection(containerEl);
 		
 		// UI Options Section
 		this.createUIOptionsSection(containerEl);
@@ -625,7 +625,7 @@ class MCPSettingTab extends PluginSettingTab {
 					}
 					
 					// Update the status display
-					this.display();
+					await this.display();
 				}));
 
 		const portSetting = new Setting(containerEl)
@@ -721,7 +721,7 @@ class MCPSettingTab extends PluginSettingTab {
 					await this.plugin.saveSettings();
 					
 					// Show/hide HTTPS settings and update HTTP toggle state
-					this.display();
+					await this.display();
 					
 					// Restart server if running
 					if (this.plugin.mcpServer?.isServerRunning()) {
@@ -764,7 +764,7 @@ class MCPSettingTab extends PluginSettingTab {
 						this.plugin.settings.certificateConfig.autoGenerate = value;
 						await this.plugin.saveSettings();
 						// Refresh the display to update the description
-						this.display();
+						await this.display();
 					}));
 			
 			new Setting(containerEl)
@@ -777,7 +777,7 @@ class MCPSettingTab extends PluginSettingTab {
 						this.plugin.settings.certificateConfig.certPath = value || undefined;
 						await this.plugin.saveSettings();
 						// Refresh display to update configuration examples
-						this.display();
+						await this.display();
 					}));
 			
 			new Setting(containerEl)
@@ -874,7 +874,7 @@ class MCPSettingTab extends PluginSettingTab {
 						this.plugin.settings.apiKey = this.plugin.generateApiKey();
 						await this.plugin.saveSettings();
 						new Notice('API key regenerated. Update your MCP clients with the new key.');
-						this.display(); // Refresh the settings display
+						await this.display(); // Refresh the settings display
 					}
 				}));
 		
@@ -908,7 +908,7 @@ class MCPSettingTab extends PluginSettingTab {
 					}
 					
 					// Refresh display to update examples
-					this.display();
+					await this.display();
 				}));
 	}
 
@@ -934,7 +934,7 @@ class MCPSettingTab extends PluginSettingTab {
 					}
 					
 					// Refresh display to update examples
-					this.display();
+					await this.display();
 				}));
 
 		// Path Exclusions Setting
@@ -960,7 +960,7 @@ class MCPSettingTab extends PluginSettingTab {
 					}
 					
 					// Refresh display to show/hide file management options
-					this.display();
+					await this.display();
 				}));
 
 		// Show context menu toggle if path exclusions are enabled
@@ -1037,7 +1037,7 @@ class MCPSettingTab extends PluginSettingTab {
 					}
 					
 					// Refresh display
-					this.display();
+					await this.display();
 				}));
 		
 		// Show additional settings if Smart Connections is enabled
@@ -1280,7 +1280,7 @@ class MCPSettingTab extends PluginSettingTab {
 					// Force reload to ensure fresh state
 					await this.plugin.ignoreManager!.forceReload();
 					new Notice('📄 Default .mcpignore template created');
-					this.display(); // Refresh to update status
+					await this.display(); // Refresh to update status
 				} catch (error) {
 					Debug.log('Failed to create .mcpignore template:', error);
 					new Notice('❌ Failed to create template');
@@ -1295,7 +1295,7 @@ class MCPSettingTab extends PluginSettingTab {
 				try {
 					await this.plugin.ignoreManager!.forceReload();
 					new Notice('🔄 Exclusion patterns reloaded');
-					this.display(); // Refresh to update status
+					await this.display(); // Refresh to update status
 				} catch (error) {
 					Debug.log('Failed to reload patterns:', error);
 					new Notice('❌ Failed to reload patterns');
@@ -1716,10 +1716,10 @@ class MCPSettingTab extends PluginSettingTab {
 		}
 	}
 
-	refreshConnectionStatus(): void {
+	async refreshConnectionStatus(): Promise<void> {
 		// Simply refresh the entire settings display to ensure accurate data
 		// This is more reliable than trying to manually update DOM elements
-		this.display();
+		await this.display();
 	}
 
 	private updatePortApplyButton(setting: Setting, hasChanges: boolean, pendingPort: number): void {
