@@ -1,0 +1,318 @@
+/**
+ * Smart Connections tools - semantic search using pre-computed embeddings
+ * 
+ * Adapted from smart-connections-mcp by Daniel Glickman
+ * https://github.com/msdanyg/smart-connections-mcp
+ */
+
+import { App } from 'obsidian';
+import { ObsidianAPI } from '../utils/obsidian-api';
+import { SmartConnectionsLoader } from '../utils/smart-connections-loader';
+import { SmartSearchEngine } from '../utils/smart-search-engine';
+import { Debug } from '../utils/debug';
+import type { Tool } from '@modelcontextprotocol/sdk/types.js';
+
+/**
+ * Lazy-initialized search engine singleton per API instance
+ */
+const searchEngineCache = new WeakMap<App, SmartSearchEngine>();
+
+async function getSearchEngine(api: ObsidianAPI): Promise<SmartSearchEngine> {
+  const app = api.getApp();
+  
+  if (!searchEngineCache.has(app)) {
+    const loader = new SmartConnectionsLoader(app);
+    await loader.initialize();
+    const engine = new SmartSearchEngine(loader);
+    searchEngineCache.set(app, engine);
+    Debug.log('🧠 Smart Connections search engine initialized');
+  }
+  
+  return searchEngineCache.get(app)!;
+}
+
+/**
+ * Check if Smart Connections data is available
+ */
+export async function hasSmartConnectionsData(api: ObsidianAPI): Promise<boolean> {
+  const app = api.getApp();
+  const adapter = app.vault.adapter;
+  
+  try {
+    const configExists = await adapter.exists('.smart-env/smart_env.json');
+    const multiExists = await adapter.exists('.smart-env/multi');
+    return configExists && multiExists;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Check if Smart Connections plugin is installed
+ */
+export function hasSmartConnectionsPlugin(api: ObsidianAPI): boolean {
+  const app = api.getApp();
+  // @ts-ignore - access plugins
+  const plugins = app.plugins?.plugins || {};
+  return !!plugins['smart-connections'];
+}
+
+/**
+ * Smart Connections MCP tools
+ */
+export const smartConnectionsTools: Tool[] = [
+  {
+    name: 'smart_similar_notes',
+    description: '🧠 Find notes semantically similar to a given note using embeddings. Returns paths, similarity scores, and available blocks.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        note_path: {
+          type: 'string',
+          description: 'Path to the note (e.g., "Note.md" or "Folder/Note.md")'
+        },
+        threshold: {
+          type: 'number',
+          description: 'Similarity threshold (0-1), default 0.5',
+          minimum: 0,
+          maximum: 1,
+          default: 0.5
+        },
+        limit: {
+          type: 'number',
+          description: 'Maximum number of results, default 10',
+          minimum: 1,
+          default: 10
+        }
+      },
+      required: ['note_path']
+    }
+  },
+  
+  {
+    name: 'smart_connection_graph',
+    description: '🕸️ Build a multi-level connection graph starting from a note, showing how notes are semantically connected.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        note_path: {
+          type: 'string',
+          description: 'Path to the note to start from'
+        },
+        depth: {
+          type: 'number',
+          description: 'Depth of the connection graph (levels), default 2',
+          minimum: 1,
+          default: 2
+        },
+        threshold: {
+          type: 'number',
+          description: 'Similarity threshold (0-1), default 0.6',
+          minimum: 0,
+          maximum: 1,
+          default: 0.6
+        },
+        max_per_level: {
+          type: 'number',
+          description: 'Max connections per level, default 5',
+          minimum: 1,
+          default: 5
+        }
+      },
+      required: ['note_path']
+    }
+  },
+  
+  {
+    name: 'smart_search_notes',
+    description: '🔍 Search for notes using a text query. Returns notes ranked by relevance with similarity scores.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        query: {
+          type: 'string',
+          description: 'Search query text'
+        },
+        limit: {
+          type: 'number',
+          description: 'Maximum number of results, default 10',
+          minimum: 1,
+          default: 10
+        },
+        threshold: {
+          type: 'number',
+          description: 'Similarity threshold (0-1), default 0.5',
+          minimum: 0,
+          maximum: 1,
+          default: 0.5
+        }
+      },
+      required: ['query']
+    }
+  },
+  
+  {
+    name: 'smart_embedding_neighbors',
+    description: '🎯 Find nearest neighbors for a given embedding vector. Useful for custom similarity searches.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        embedding_vector: {
+          type: 'array',
+          items: { type: 'number' },
+          description: '384-dimensional embedding vector'
+        },
+        k: {
+          type: 'number',
+          description: 'Number of neighbors to return, default 10',
+          minimum: 1,
+          default: 10
+        },
+        threshold: {
+          type: 'number',
+          description: 'Similarity threshold (0-1), default 0.5',
+          minimum: 0,
+          maximum: 1,
+          default: 0.5
+        }
+      },
+      required: ['embedding_vector']
+    }
+  },
+  
+  {
+    name: 'smart_note_content',
+    description: '📄 Retrieve the full content of a note with Smart Connections metadata, optionally with specific blocks/sections extracted.',
+    inputSchema: {
+      type: 'object',
+      properties: {
+        note_path: {
+          type: 'string',
+          description: 'Path to the note'
+        },
+        include_blocks: {
+          type: 'array',
+          items: { type: 'string' },
+          description: 'Specific block headings to include (optional)'
+        }
+      },
+      required: ['note_path']
+    }
+  },
+  
+  {
+    name: 'smart_stats',
+    description: 'ℹ️ Get statistics about the Smart Connections knowledge base (total notes, blocks, embedding model, etc.).',
+    inputSchema: {
+      type: 'object',
+      properties: {}
+    }
+  }
+];
+
+/**
+ * Create tool handlers for Smart Connections tools
+ */
+export function createSmartConnectionsToolHandlers(api: ObsidianAPI): Map<string, (args: any) => Promise<any>> {
+  const handlers = new Map<string, (args: any) => Promise<any>>();
+
+  handlers.set('smart_similar_notes', async (args: any) => {
+    const engine = await getSearchEngine(api);
+    const { note_path, threshold = 0.5, limit = 10 } = args;
+    const results = engine.getSimilarNotes(note_path, threshold, limit);
+    
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(results, null, 2)
+      }]
+    };
+  });
+
+  handlers.set('smart_connection_graph', async (args: any) => {
+    const engine = await getSearchEngine(api);
+    const { note_path, depth = 2, threshold = 0.6, max_per_level = 5 } = args;
+    const graph = engine.getConnectionGraph(note_path, depth, threshold, max_per_level);
+    
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(graph, null, 2)
+      }]
+    };
+  });
+
+  handlers.set('smart_search_notes', async (args: any) => {
+    const engine = await getSearchEngine(api);
+    const { query, limit = 10, threshold = 0.5 } = args;
+    const results = engine.searchByQuery(query, limit, threshold);
+    
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(results, null, 2)
+      }]
+    };
+  });
+
+  handlers.set('smart_embedding_neighbors', async (args: any) => {
+    const engine = await getSearchEngine(api);
+    const { embedding_vector, k = 10, threshold = 0.5 } = args;
+    const results = engine.getEmbeddingNeighbors(embedding_vector, k, threshold);
+    
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(results, null, 2)
+      }]
+    };
+  });
+
+  handlers.set('smart_note_content', async (args: any) => {
+    const engine = await getSearchEngine(api);
+    const { note_path, include_blocks } = args;
+    const result = await engine.getNoteWithContext(note_path, include_blocks);
+    
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(result, null, 2)
+      }]
+    };
+  });
+
+  handlers.set('smart_stats', async (args: any) => {
+    const engine = await getSearchEngine(api);
+    const stats = engine.getStats();
+    
+    return {
+      content: [{
+        type: 'text' as const,
+        text: JSON.stringify(stats, null, 2)
+      }]
+    };
+  });
+
+  return handlers;
+}
+
+/**
+ * Create Smart Connections tools with handlers if enabled and data is available
+ */
+export async function createSmartConnectionsTools(api?: ObsidianAPI, settings?: any): Promise<{ tools: Tool[]; handlers: Map<string, (args: any) => Promise<any>> }> {
+  // Check settings toggle first
+  if (!settings?.enableSmartConnections) {
+    Debug.log('Smart Connections tools disabled in settings');
+    return { tools: [], handlers: new Map() };
+  }
+  
+  // Then check if data is available
+  if (!api || !(await hasSmartConnectionsData(api))) {
+    Debug.warn('Smart Connections enabled but data not found');
+    return { tools: [], handlers: new Map() };
+  }
+  
+  Debug.log('✅ Smart Connections tools enabled (6 tools added)');
+  const handlers = createSmartConnectionsToolHandlers(api);
+  return { tools: smartConnectionsTools, handlers };
+}
