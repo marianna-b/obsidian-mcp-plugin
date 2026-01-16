@@ -177,6 +177,7 @@ export class SmartSearchEngine {
   /**
    * Semantic search by embedding the query text
    * Uses Smart Connections' loaded embedding model if available
+   * Searches at block level for more precise results
    */
   async searchByQuery(
     queryText: string,
@@ -200,21 +201,69 @@ export class SmartSearchEngine {
     // Cap at 50 to prevent large responses
     const maxResults = Math.min(limit * 2, 50);
     
-    // Find notes similar to the query embedding
-    const results = this.getEmbeddingNeighbors(queryEmbedding, maxResults, threshold);
+    // Build vector dataset from blocks (if available) or fall back to sources
+    const blocks = this.loader.getBlocks();
     
-    // Deduplicate by path (case-insensitive)
-    const seen = new Map<string, SimilarNote>();
-    for (const result of results) {
-      const normalizedPath = result.path.toLowerCase();
-      if (!seen.has(normalizedPath) || result.similarity > seen.get(normalizedPath)!.similarity) {
-        seen.set(normalizedPath, result);
+    if (blocks.size > 0) {
+      // Search at block level
+      const blockVectors = Array.from(blocks.entries())
+        .map(([key, block]) => {
+          const emb = block.embeddings[this.embeddingModelKey];
+          return {
+            id: key,
+            vec: emb?.vec || [],
+            metadata: {
+              path: key.split('#')[0], // Extract path from "path#heading"
+              block: key.split('#')[1] || '', // Extract heading
+              lines: block.lines
+            }
+          };
+        })
+        .filter(item => item.vec.length > 0);
+      
+      // Find nearest neighbors at block level
+      const neighbors = findNearestNeighbors(
+        queryEmbedding,
+        blockVectors,
+        maxResults,
+        threshold
+      );
+      
+      // Group by note path and keep best block match per note
+      const noteResults = new Map<string, SimilarNote>();
+      for (const neighbor of neighbors) {
+        const path = neighbor.metadata.path;
+        const normalizedPath = path.toLowerCase();
+        
+        if (!noteResults.has(normalizedPath) || neighbor.similarity > noteResults.get(normalizedPath)!.similarity) {
+          noteResults.set(normalizedPath, {
+            path,
+            similarity: neighbor.similarity,
+            matchedBlock: neighbor.metadata.block
+          });
+        }
       }
+      
+      return Array.from(noteResults.values())
+        .sort((a, b) => b.similarity - a.similarity)
+        .slice(0, limit);
+    } else {
+      // Fall back to note-level search
+      const results = this.getEmbeddingNeighbors(queryEmbedding, maxResults, threshold);
+      
+      // Deduplicate by path (case-insensitive)
+      const seen = new Map<string, SimilarNote>();
+      for (const result of results) {
+        const normalizedPath = result.path.toLowerCase();
+        if (!seen.has(normalizedPath) || result.similarity > seen.get(normalizedPath)!.similarity) {
+          seen.set(normalizedPath, result);
+        }
+      }
+      
+      return Array.from(seen.values())
+        .sort((a, b) => b.similarity - a.similarity)
+        .slice(0, limit);
     }
-    
-    return Array.from(seen.values())
-      .sort((a, b) => b.similarity - a.similarity)
-      .slice(0, limit);
   }
   
   /**

@@ -93,7 +93,7 @@ export class SmartConnectionsLoader {
 
             // Process all key-value pairs in the object
             for (const key of Object.keys(obj)) {
-              // Only process smart_sources entries (not smart_blocks)
+              // Process smart_sources entries (note-level)
               if (key.startsWith('smart_sources:')) {
                 const sourceData: SmartSource = obj[key];
                 // Skip entries with null/undefined paths
@@ -108,6 +108,13 @@ export class SmartConnectionsLoader {
                   }
                 }
               }
+              // Process smart_blocks entries (block-level)
+              else if (key.startsWith('smart_blocks:')) {
+                const blockData: SmartBlock = obj[key];
+                if (blockData && blockData.key) {
+                  this.blocks.set(blockData.key, blockData);
+                }
+              }
             }
           } catch (parseError) {
             // Skip lines that can't be parsed
@@ -119,7 +126,7 @@ export class SmartConnectionsLoader {
       }
     }
 
-    Debug.log(`✅ Loaded ${this.sources.size} Smart Connections sources`);
+    Debug.log(`✅ Loaded ${this.sources.size} sources and ${this.blocks.size} blocks`);
   }
 
   /**
@@ -134,6 +141,13 @@ export class SmartConnectionsLoader {
    */
   getSource(notePath: string): SmartSource | undefined {
     return this.sources.get(notePath);
+  }
+
+  /**
+   * Get all blocks
+   */
+  getBlocks(): Map<string, SmartBlock> {
+    return this.blocks;
   }
 
   /**
