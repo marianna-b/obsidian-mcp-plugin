@@ -26,7 +26,7 @@ const DEMAND_CHECK_THROTTLE = 60 * 1000; // 1 minute
 const lastDemandCheck = new WeakMap<App, number>();
 
 // Periodic refresh interval (set by user, checked in background)
-let refreshInterval: NodeJS.Timeout | null = null;
+let refreshInterval: any = null;
 let currentApp: App | null = null;
 
 /**
