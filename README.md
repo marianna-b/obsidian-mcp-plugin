@@ -96,6 +96,40 @@ The plugin provides 8 semantic tool groups that give AI comprehensive vault acce
 | **🗃️ bases** | Database views | Query and export Bases (if available) |
 | **ℹ️ system** | Vault info | Server status, commands, web fetch |
 
+## Smart Connections Integration
+
+This fork adds 6 additional tools powered by the [Smart Connections](https://github.com/brianpetro/obsidian-smart-connections) plugin. These tools expose pre-computed semantic embeddings directly to AI, enabling true vector-based similarity search without any runtime embedding calls.
+
+**Prerequisites:**
+- Smart Connections plugin installed and enabled in Obsidian
+- Embeddings generated (open Smart Connections panel → click "Process All")
+- Smart Connections tools enabled in plugin settings (Settings → Smart Connections Integration)
+
+| Tool | Description |
+|------|-------------|
+| **🧠 smart_similar_notes** | Find notes semantically similar to a given note. Returns ranked paths with cosine similarity scores and available block headings. |
+| **🕸️ smart_connection_graph** | Build a multi-level semantic connection graph from a starting note. Configurable depth, similarity threshold, and max connections per level. |
+| **🔍 smart_search_notes** | Free-text semantic search across your vault using embeddings. Finds conceptually related notes even without shared keywords. Returns block-level results when available. |
+| **🎯 smart_embedding_neighbors** | Find the nearest neighbors for a raw 384-dimensional embedding vector. For advanced use — e.g. finding vault notes related to external text. |
+| **📄 smart_note_content** | Retrieve a note's full content with its Smart Connections metadata (embedding status, block list). Optionally extract specific sections by heading. |
+| **ℹ️ smart_stats** | Get statistics about the indexed knowledge base: total notes, total blocks, embedding model, and dimension. |
+
+### How it works
+
+Embeddings are loaded lazily from `.smart-env/` on the first tool call and cached in memory. The cache is automatically invalidated when Smart Connections regenerates embeddings (detected via file mtime). An optional background refresh interval (5/15/30/60 min) can be configured in plugin settings.
+
+### Example
+
+```
+User: "What notes in my vault are most related to my note on Zettelkasten?"
+
+AI calls smart_similar_notes with note_path="Zettelkasten.md"
+→ Returns ranked list of semantically similar notes with similarity scores
+
+AI calls smart_connection_graph with note_path="Zettelkasten.md", depth=2
+→ Returns a 2-hop semantic neighbourhood map of connected ideas
+```
+
 ## Documentation
 
 Detailed documentation for each tool and feature:
