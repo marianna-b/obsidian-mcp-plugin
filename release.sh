@@ -134,25 +134,37 @@ push_to_github() {
 # Create GitHub release
 create_github_release() {
     local version=$1
-    
-    info "Creating GitHub release..."
+
+    # Derive OWNER/REPO from the origin remote URL
+    local origin_url
+    origin_url=$(git remote get-url origin)
+    # Handles both https://github.com/OWNER/REPO.git and git@github.com:OWNER/REPO.git
+    local repo
+    repo=$(echo "$origin_url" | sed -E 's|.*github\.com[:/]([^/]+/[^/]+?)(\.git)?$|\1|')
+
+    info "Creating GitHub release for ${repo}..."
     
     # Extract changelog for this version if it exists
+    local brat_user
+    brat_user=$(echo "$repo" | cut -d'/' -f1)
+    local brat_repo
+    brat_repo=$(echo "$repo" | cut -d'/' -f2)
     NOTES="## Release v${version}
 
 ### Installation via BRAT
 1. Install the BRAT plugin if you haven't already
 2. Command palette → \"BRAT: Add a beta plugin for testing\"
-3. Enter: \`marianna-b/obsidian-mcp-plugin\`
+3. Enter: \`${brat_user}/${brat_repo}\`
 4. Enable the plugin in Community Plugins"
     
     gh release create "v${version}" \
+        --repo "${repo}" \
         --title "v${version}" \
         --notes "$NOTES" \
         --generate-notes \
         main.js \
         manifest.json \
-        styles.css || true
+        styles.css
     
     success "GitHub release created"
 }
