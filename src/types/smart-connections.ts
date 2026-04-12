@@ -64,7 +64,7 @@ export interface SmartEnvConfig {
     min_chars: number;
     embed_model: {
       adapter: string;
-      [key: string]: any;
+      [key: string]: unknown;
     };
     excluded_headings: string;
     file_exclusions: string;
@@ -73,7 +73,7 @@ export interface SmartEnvConfig {
   smart_chat_threads?: {
     chat_model: {
       adapter: string;
-      [key: string]: any;
+      [key: string]: unknown;
     };
     active_thread_key?: string;
   };

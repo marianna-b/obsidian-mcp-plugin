@@ -26,7 +26,7 @@ const DEMAND_CHECK_THROTTLE = 60 * 1000; // 1 minute
 const lastDemandCheck = new WeakMap<App, number>();
 
 // Periodic refresh interval (set by user, checked in background)
-let refreshInterval: any = null;
+let refreshInterval: ReturnType<typeof setInterval> | null = null;
 let currentApp: App | null = null;
 
 /**
@@ -57,7 +57,7 @@ async function hasEmbeddingsChanged(app: App): Promise<boolean> {
       Debug.log('📝 Smart Connections data changed (config mtime updated)');
       return true;
     }
-  } catch (error) {
+  } catch {
     // If we can't check, assume no change (fail-safe)
     return false;
   }
@@ -136,17 +136,18 @@ export function startPeriodicRefresh(app: App, intervalMinutes: number): void {
   
   Debug.log(`⏰ Smart Connections periodic refresh started (every ${intervalMinutes} min)`);
   
-  refreshInterval = setInterval(async () => {
-    if (!currentApp) return;
-    
-    try {
-      if (await hasEmbeddingsChanged(currentApp)) {
-        Debug.log('🔄 Periodic check: embeddings changed, reloading...');
-        await loadSearchEngine(currentApp);
+  refreshInterval = setInterval(() => {
+    void (async () => {
+      if (!currentApp) return;
+      try {
+        if (await hasEmbeddingsChanged(currentApp)) {
+          Debug.log('🔄 Periodic check: embeddings changed, reloading...');
+          await loadSearchEngine(currentApp);
+        }
+      } catch (error) {
+        Debug.error('Error in periodic Smart Connections refresh:', error);
       }
-    } catch (error) {
-      Debug.error('Error in periodic Smart Connections refresh:', error);
-    }
+    })();
   }, intervalMs);
 }
 
@@ -183,8 +184,8 @@ export async function hasSmartConnectionsData(api: ObsidianAPI): Promise<boolean
  */
 export function hasSmartConnectionsPlugin(api: ObsidianAPI): boolean {
   const app = api.getApp();
-  // @ts-ignore - access plugins
-  const plugins = app.plugins?.plugins || {};
+  const appWithPlugins = app as unknown as { plugins?: { plugins?: Record<string, unknown> } };
+  const plugins = appWithPlugins.plugins?.plugins ?? {};
   return !!plugins['smart-connections'];
 }
 
@@ -344,12 +345,12 @@ export const smartConnectionsTools: Tool[] = [
 /**
  * Create tool handlers for Smart Connections tools
  */
-export function createSmartConnectionsToolHandlers(api: ObsidianAPI): Map<string, (args: any) => Promise<any>> {
-  const handlers = new Map<string, (args: any) => Promise<any>>();
+export function createSmartConnectionsToolHandlers(api: ObsidianAPI): Map<string, (args: unknown) => Promise<unknown>> {
+  const handlers = new Map<string, (args: unknown) => Promise<unknown>>();
 
-  handlers.set('smart_similar_notes', async (args: any) => {
+  handlers.set('smart_similar_notes', async (args: unknown) => {
     const engine = await getSearchEngine(api);
-    const { note_path, threshold = 0.5, limit = 10 } = args;
+    const { note_path, threshold = 0.5, limit = 10 } = args as { note_path: string; threshold?: number; limit?: number };
     const results = engine.getSimilarNotes(note_path, threshold, limit);
     
     return {
@@ -360,9 +361,9 @@ export function createSmartConnectionsToolHandlers(api: ObsidianAPI): Map<string
     };
   });
 
-  handlers.set('smart_connection_graph', async (args: any) => {
+  handlers.set('smart_connection_graph', async (args: unknown) => {
     const engine = await getSearchEngine(api);
-    const { note_path, depth = 2, threshold = 0.6, max_per_level = 5 } = args;
+    const { note_path, depth = 2, threshold = 0.6, max_per_level = 5 } = args as { note_path: string; depth?: number; threshold?: number; max_per_level?: number };
     const graph = engine.getConnectionGraph(note_path, depth, threshold, max_per_level);
     
     return {
@@ -373,9 +374,9 @@ export function createSmartConnectionsToolHandlers(api: ObsidianAPI): Map<string
     };
   });
 
-  handlers.set('smart_search_notes', async (args: any) => {
+  handlers.set('smart_search_notes', async (args: unknown) => {
     const engine = await getSearchEngine(api);
-    const { query, limit = 10, threshold = 0.5 } = args;
+    const { query, limit = 10, threshold = 0.5 } = args as { query: string; limit?: number; threshold?: number };
     const results = await engine.searchByQuery(query, limit, threshold);
     
     return {
@@ -386,9 +387,9 @@ export function createSmartConnectionsToolHandlers(api: ObsidianAPI): Map<string
     };
   });
 
-  handlers.set('smart_embedding_neighbors', async (args: any) => {
+  handlers.set('smart_embedding_neighbors', async (args: unknown) => {
     const engine = await getSearchEngine(api);
-    const { embedding_vector, k = 10, threshold = 0.5 } = args;
+    const { embedding_vector, k = 10, threshold = 0.5 } = args as { embedding_vector: number[]; k?: number; threshold?: number };
     const results = engine.getEmbeddingNeighbors(embedding_vector, k, threshold);
     
     return {
@@ -399,9 +400,9 @@ export function createSmartConnectionsToolHandlers(api: ObsidianAPI): Map<string
     };
   });
 
-  handlers.set('smart_note_content', async (args: any) => {
+  handlers.set('smart_note_content', async (args: unknown) => {
     const engine = await getSearchEngine(api);
-    const { note_path, include_blocks } = args;
+    const { note_path, include_blocks } = args as { note_path: string; include_blocks?: string[] };
     const result = await engine.getNoteWithContext(note_path, include_blocks);
     
     return {
@@ -412,7 +413,7 @@ export function createSmartConnectionsToolHandlers(api: ObsidianAPI): Map<string
     };
   });
 
-  handlers.set('smart_stats', async (args: any) => {
+  handlers.set('smart_stats', async (args: unknown) => {
     const engine = await getSearchEngine(api);
     const stats = engine.getStats();
     
@@ -430,9 +431,10 @@ export function createSmartConnectionsToolHandlers(api: ObsidianAPI): Map<string
 /**
  * Create Smart Connections tools with handlers if enabled and data is available
  */
-export async function createSmartConnectionsTools(api?: ObsidianAPI, settings?: any): Promise<{ tools: Tool[]; handlers: Map<string, (args: any) => Promise<any>> }> {
+export async function createSmartConnectionsTools(api?: ObsidianAPI, settings?: unknown): Promise<{ tools: Tool[]; handlers: Map<string, (args: unknown) => Promise<unknown>> }> {
   // Check settings toggle first
-  if (!settings?.enableSmartConnections) {
+  const typedSettings = settings as { enableSmartConnections?: boolean } | undefined;
+  if (!typedSettings?.enableSmartConnections) {
     Debug.log('Smart Connections tools disabled in settings');
     return { tools: [], handlers: new Map() };
   }

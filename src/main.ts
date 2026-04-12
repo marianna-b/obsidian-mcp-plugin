@@ -544,12 +544,10 @@ class MCPSettingTab extends PluginSettingTab {
 		this.plugin = plugin;
 	}
 
-	async display(): Promise<void> {
+	display(): void {
 		const {containerEl} = this;
 
 		containerEl.empty();
-
-		;
 
 		// Connection Status Section
 		this.createConnectionStatusSection(containerEl);
@@ -567,7 +565,7 @@ class MCPSettingTab extends PluginSettingTab {
 		this.createSecuritySection(containerEl);
 		
 		// Smart Connections Section
-		await this.createSmartConnectionsSection(containerEl);
+		void this.createSmartConnectionsSection(containerEl);
 		
 		// Tool Visibility Section
 		this.createToolVisibilitySection(containerEl);
@@ -654,7 +652,7 @@ class MCPSettingTab extends PluginSettingTab {
 					}
 					
 					// Update the status display
-					await this.display();
+					this.display();
 				}));
 
 		const portSetting = new Setting(containerEl)
@@ -700,7 +698,7 @@ class MCPSettingTab extends PluginSettingTab {
 								new Notice(`Restarting MCP server on port ${newPort}...`);
 								await this.plugin.stopMCPServer();
 								await this.plugin.startMCPServer();
-								setTimeout(() => this.refreshConnectionStatus(), 500);
+							setTimeout(() => { void this.refreshConnectionStatus(); }, 500);
 							}
 							
 							// Hide apply button
@@ -750,7 +748,7 @@ class MCPSettingTab extends PluginSettingTab {
 					await this.plugin.saveSettings();
 					
 					// Show/hide HTTPS settings and update HTTP toggle state
-					await this.display();
+					this.display();
 					
 					// Restart server if running
 					if (this.plugin.mcpServer?.isServerRunning()) {
@@ -793,7 +791,7 @@ class MCPSettingTab extends PluginSettingTab {
 						this.plugin.settings.certificateConfig.autoGenerate = value;
 						await this.plugin.saveSettings();
 						// Refresh the display to update the description
-						await this.display();
+						this.display();
 					}));
 			
 			new Setting(containerEl)
@@ -806,7 +804,7 @@ class MCPSettingTab extends PluginSettingTab {
 						this.plugin.settings.certificateConfig.certPath = value || undefined;
 						await this.plugin.saveSettings();
 						// Refresh display to update configuration examples
-						await this.display();
+						this.display();
 					}));
 			
 			new Setting(containerEl)
@@ -900,11 +898,11 @@ class MCPSettingTab extends PluginSettingTab {
 						this.app,
 						'Are you sure you want to regenerate the API key? This will invalidate the current key and require updating all MCP clients.',
 						async () => {
-							this.plugin.settings.apiKey = this.plugin.generateApiKey();
-							await this.plugin.saveSettings();
-							new Notice('API key regenerated. Update your mcp clients with the new key.');
-							this.display();
-						}
+						this.plugin.settings.apiKey = this.plugin.generateApiKey();
+						await this.plugin.saveSettings();
+						new Notice('API key regenerated. Update your mcp clients with the new key.');
+						void this.display();
+					}
 					).open();
 				}));
 		
@@ -938,7 +936,7 @@ class MCPSettingTab extends PluginSettingTab {
 					}
 					
 					// Refresh display to update examples
-					await this.display();
+					this.display();
 				}));
 	}
 
@@ -964,7 +962,7 @@ class MCPSettingTab extends PluginSettingTab {
 					}
 					
 					// Refresh display to update examples
-					await this.display();
+					this.display();
 				}));
 
 		// Path Exclusions Setting
@@ -990,7 +988,7 @@ class MCPSettingTab extends PluginSettingTab {
 					}
 					
 					// Refresh display to show/hide file management options
-					await this.display();
+					this.display();
 				}));
 
 		// Show context menu toggle if path exclusions are enabled
@@ -1020,7 +1018,7 @@ class MCPSettingTab extends PluginSettingTab {
 	}
 
 	private async createSmartConnectionsSection(containerEl: HTMLElement): Promise<void> {
-		containerEl.createEl('h3', {text: 'Smart Connections Integration'});
+		new Setting(containerEl).setName("Smart connections integration").setHeading();
 		
 		// Check if Smart Connections plugin is installed
 		const hasPlugin = this.checkSmartConnectionsPlugin();
@@ -1030,24 +1028,24 @@ class MCPSettingTab extends PluginSettingTab {
 		const statusEl = containerEl.createDiv('mcp-status-section');
 		if (!hasPlugin) {
 			statusEl.createEl('p', {
-				text: '⚠️ Smart Connections plugin not detected',
+				text: '⚠️ smart connections plugin not detected',
 				cls: 'setting-item-description mod-warning'
 			});
 		} else if (!hasData) {
 			statusEl.createEl('p', {
-				text: '⚠️ Smart Connections plugin detected, but embeddings not found. Generate embeddings in Smart Connections settings.',
+				text: '⚠️ smart connections plugin detected, but embeddings not found. Generate embeddings in smart connections settings.',
 				cls: 'setting-item-description mod-warning'
 			});
 		} else {
 			statusEl.createEl('p', {
-				text: '✅ Smart Connections embeddings found',
+				text: '✅ smart connections embeddings found',
 				cls: 'setting-item-description mcp-security-note'
 			});
 		}
 		
 		new Setting(containerEl)
-			.setName('Enable Smart Connections tools')
-			.setDesc('Provide 6 additional MCP tools for semantic search using Smart Connections embeddings')
+			.setName('Enable smart connections tools')
+			.setDesc('Provide 6 additional mcp tools for semantic search using smart connections embeddings')
 			.addToggle(toggle => toggle
 				.setValue(this.plugin.settings.enableSmartConnections)
 				.setDisabled(!hasData)
@@ -1067,14 +1065,14 @@ class MCPSettingTab extends PluginSettingTab {
 					}
 					
 					// Refresh display
-					await this.display();
+					this.display();
 				}));
 		
 		// Show additional settings if Smart Connections is enabled
 		if (this.plugin.settings.enableSmartConnections && hasData) {
 			new Setting(containerEl)
 				.setName('Auto-reload on embedding updates')
-				.setDesc('Automatically check for and reload embeddings when Smart Connections regenerates them')
+				.setDesc('Automatically check for and reload embeddings when smart connections regenerates them')
 				.addToggle(toggle => toggle
 					.setValue(this.plugin.settings.smartConnectionsAutoReload)
 					.onChange(async (value) => {
@@ -1094,7 +1092,7 @@ class MCPSettingTab extends PluginSettingTab {
 							try {
 								const { stopPeriodicRefresh } = await import('./tools/smart-connections-tools.js');
 								stopPeriodicRefresh();
-								new Notice('Smart Connections: Periodic refresh disabled');
+								new Notice('Smart connections: periodic refresh disabled');
 							} catch (error) {
 								Debug.error('Failed to stop periodic refresh:', error);
 							}
@@ -1128,16 +1126,16 @@ class MCPSettingTab extends PluginSettingTab {
 			}
 			
 			// Manual reload button
-			const reloadSetting = new Setting(containerEl)
+			new Setting(containerEl)
 				.setName('Manual reload')
-				.setDesc('Manually reload Smart Connections embeddings cache')
+				.setDesc('Manually reload smart connections embeddings cache')
 				.addButton(button => button
-					.setButtonText('Reload Now')
+					.setButtonText('Reload now')
 					.onClick(async () => {
 						try {
 							const { clearSmartConnectionsCache } = await import('./tools/smart-connections-tools.js');
 							clearSmartConnectionsCache(this.app);
-							new Notice('Smart Connections cache cleared. Will reload on next use.');
+							new Notice('Smart connections cache cleared. Will reload on next use.');
 						} catch (error) {
 							Debug.error('Failed to clear cache:', error);
 							new Notice('Failed to clear cache');
@@ -1149,23 +1147,23 @@ class MCPSettingTab extends PluginSettingTab {
 		if (hasPlugin && !hasData) {
 			new Setting(containerEl)
 				.setName('Generate embeddings')
-				.setDesc('Open Smart Connections settings to generate embeddings')
+				.setDesc('Open smart connections settings to generate embeddings')
 				.addButton(button => button
-					.setButtonText('Open Smart Connections')
+					.setButtonText('Open smart connections')
 					.onClick(() => {
-						// @ts-ignore - access plugin settings
-						const setting: any = (this.app as any).setting;
+						const appWithSetting = this.app as unknown as { setting?: { open: () => void; openTabById: (id: string) => void } };
+						const setting = appWithSetting.setting;
 						if (setting) {
 							setting.open();
 							setting.openTabById('smart-connections');
 						}
-					}));
+					}))
 		}
 	}
 	
 	private checkSmartConnectionsPlugin(): boolean {
-		// @ts-ignore - access plugins
-		const plugins = this.app.plugins?.plugins || {};
+		const appWithPlugins = this.app as unknown as { plugins?: { plugins?: Record<string, unknown> } };
+		const plugins = appWithPlugins.plugins?.plugins ?? {};
 		return !!plugins['smart-connections'];
 	}
 	
@@ -1325,7 +1323,7 @@ class MCPSettingTab extends PluginSettingTab {
 						// Force reload to ensure fresh state
 						await this.plugin.ignoreManager!.forceReload();
 						new Notice('📄 default .mcpignore template created');
-						this.display(); // Refresh to update status
+						void this.display(); // Refresh to update status
 					} catch (error) {
 						Debug.log('Failed to create .mcpignore template:', error);
 						new Notice('❌ failed to create template');
@@ -1342,7 +1340,7 @@ class MCPSettingTab extends PluginSettingTab {
 					try {
 						await this.plugin.ignoreManager!.forceReload();
 						new Notice('🔄 exclusion patterns reloaded');
-						this.display(); // Refresh to update status
+						void this.display(); // Refresh to update status
 					} catch (error) {
 						Debug.log('Failed to reload patterns:', error);
 						new Notice('❌ failed to reload patterns');
@@ -1446,9 +1444,9 @@ class MCPSettingTab extends PluginSettingTab {
 						for (const action of actions) {
 							visibility[`${operation}.${action}`] = value;
 						}
-						await this.plugin.saveSettings();
-						this.display(); // Re-render for updated states
-					});
+					await this.plugin.saveSettings();
+					void this.display(); // Re-render for updated states
+				});
 				});
 
 			// Move parent toggle before children container
@@ -1482,9 +1480,9 @@ class MCPSettingTab extends PluginSettingTab {
 								delete visibility[operation]; // mixed = not explicitly false
 							}
 
-							await this.plugin.saveSettings();
-							this.display(); // Re-render for parent state update
-						}));
+					await this.plugin.saveSettings();
+					void this.display(); // Re-render for parent state update
+				}));
 			}
 		}
 	}
@@ -1728,7 +1726,7 @@ class MCPSettingTab extends PluginSettingTab {
 	async refreshConnectionStatus(): Promise<void> {
 		// Simply refresh the entire settings display to ensure accurate data
 		// This is more reliable than trying to manually update DOM elements
-		await this.display();
+		this.display();
 	}
 
 	private updatePortApplyButton(setting: Setting, hasChanges: boolean, pendingPort: number): void {

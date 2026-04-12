@@ -53,7 +53,7 @@ export class SmartConnectionsLoader {
     }
 
     const configData = await adapter.read(configPath);
-    this.config = JSON.parse(configData);
+    this.config = JSON.parse(configData) as SmartEnvConfig;
     Debug.log('✅ Smart Connections config loaded');
   }
 
@@ -89,13 +89,13 @@ export class SmartConnectionsLoader {
             // Each line is formatted as: "key1": {...}, "key2": {...}, "key3": {...},
             // Remove trailing comma and wrap with curly braces to make valid JSON
             const cleanedLine = line.replace(/,\s*$/, '');
-            const obj = JSON.parse(`{${cleanedLine}}`);
+            const obj = JSON.parse(`{${cleanedLine}}`) as Record<string, unknown>;
 
             // Process all key-value pairs in the object
             for (const key of Object.keys(obj)) {
               // Process smart_sources entries (note-level)
               if (key.startsWith('smart_sources:')) {
-                const sourceData: SmartSource = obj[key];
+                const sourceData = obj[key] as SmartSource;
                 // Skip entries with null/undefined paths
                 if (sourceData && sourceData.path) {
                   // Verify the file actually exists before adding to cache
@@ -110,7 +110,7 @@ export class SmartConnectionsLoader {
               }
               // Process smart_blocks entries (block-level)
               else if (key.startsWith('smart_blocks:')) {
-                const blockData: SmartBlock = obj[key];
+                const blockData = obj[key] as SmartBlock;
                 if (blockData && blockData.key) {
                   this.blocks.set(blockData.key, blockData);
                 }
@@ -172,7 +172,7 @@ export class SmartConnectionsLoader {
     // The actual model key is nested in the adapter configuration
     // e.g., embed_model.transformers.model_key = "TaylorAI/bge-micro-v2"
     if (adapter && embedModel[adapter] && typeof embedModel[adapter] === 'object') {
-      const adapterConfig = embedModel[adapter] as any;
+      const adapterConfig = embedModel[adapter] as { model_key?: string };
       if (adapterConfig.model_key) {
         return adapterConfig.model_key;
       }

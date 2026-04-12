@@ -35,12 +35,12 @@ export function cosineSimilarity(vecA: number[], vecB: number[]): number {
 /**
  * Find k nearest neighbors using cosine similarity
  */
-export function findNearestNeighbors(
+export function findNearestNeighbors<TMetadata = Record<string, unknown>>(
   queryVec: number[],
-  vectors: Array<{ id: string; vec: number[]; metadata?: any }>,
+  vectors: Array<{ id: string; vec: number[]; metadata?: TMetadata }>,
   k: number,
   threshold: number = 0.0
-): Array<{ id: string; similarity: number; metadata?: any }> {
+): Array<{ id: string; similarity: number; metadata?: TMetadata }> {
   const similarities = vectors.map(item => ({
     id: item.id,
     similarity: cosineSimilarity(queryVec, item.vec),

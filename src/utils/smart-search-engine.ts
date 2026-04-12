@@ -5,9 +5,17 @@
  * https://github.com/msdanyg/smart-connections-mcp
  */
 
-import type { SmartSource, SmartBlock, SimilarNote, BlockResult, ConnectionGraph, NoteContent } from '../types/smart-connections';
-import { cosineSimilarity, findNearestNeighbors } from './embedding-utils';
+import type { SimilarNote, BlockResult, ConnectionGraph, NoteContent } from '../types/smart-connections';
+import { findNearestNeighbors } from './embedding-utils';
 import type { SmartConnectionsLoader } from './smart-connections-loader';
+
+interface SmartEmbedModel {
+  embed_batch?: (inputs: Array<{ embed_input: string }>) => Promise<Array<{ vec?: number[] }>>;
+  embed?: (text: string) => Promise<{ vec?: number[] } | number[] | null | undefined>;
+}
+
+type SourceMetadata = { blocks: string[]; lastModified: number };
+type BlockMetadata = { path: string; block: string; lines: [number, number] };
 
 export class SmartSearchEngine {
   private loader: SmartConnectionsLoader;
@@ -67,17 +75,17 @@ export class SmartSearchEngine {
         const emb = src.embeddings[this.embeddingModelKey];
         return {
           id: path,
-          vec: emb?.vec || [],
+          vec: emb?.vec ?? [],
           metadata: {
-            blocks: Object.keys(src.blocks || {}),
-            lastModified: src.last_import?.mtime || 0
-          }
+            blocks: Object.keys(src.blocks ?? {}),
+            lastModified: src.last_import?.mtime ?? 0
+          } as SourceMetadata
         };
       })
       .filter(item => item.vec.length > 0);
 
     // Find nearest neighbors
-    const neighbors = findNearestNeighbors(
+    const neighbors = findNearestNeighbors<SourceMetadata>(
       embeddings.vec,
       vectors,
       limit,
@@ -88,7 +96,7 @@ export class SmartSearchEngine {
     return neighbors.map(neighbor => ({
       path: neighbor.id,
       similarity: neighbor.similarity,
-      blocks: neighbor.metadata.blocks
+      blocks: neighbor.metadata?.blocks
     }));
   }
 
@@ -108,17 +116,17 @@ export class SmartSearchEngine {
         const emb = src.embeddings[this.embeddingModelKey];
         return {
           id: path,
-          vec: emb?.vec || [],
+          vec: emb?.vec ?? [],
           metadata: {
-            blocks: Object.keys(src.blocks || {}),
-            lastModified: src.last_import?.mtime || 0
-          }
+            blocks: Object.keys(src.blocks ?? {}),
+            lastModified: src.last_import?.mtime ?? 0
+          } as SourceMetadata
         };
       })
       .filter(item => item.vec.length > 0);
 
     // Find nearest neighbors
-    const neighbors = findNearestNeighbors(
+    const neighbors = findNearestNeighbors<SourceMetadata>(
       embeddingVector,
       vectors,
       k,
@@ -129,7 +137,7 @@ export class SmartSearchEngine {
     return neighbors.map(neighbor => ({
       path: neighbor.id,
       similarity: neighbor.similarity,
-      blocks: neighbor.metadata.blocks
+      blocks: neighbor.metadata?.blocks
     }));
   }
 
@@ -191,7 +199,7 @@ export class SmartSearchEngine {
             );
           }
         }
-      } catch (error) {
+      } catch {
         // Skip nodes that can't be processed
       }
     };
@@ -247,18 +255,18 @@ export class SmartSearchEngine {
           const emb = block.embeddings[this.embeddingModelKey];
           return {
             id: key,
-            vec: emb?.vec || [],
+            vec: emb?.vec ?? [],
             metadata: {
               path: key.split('#')[0], // Extract path from "path#heading"
-              block: key.split('#')[1] || '', // Extract heading
+              block: key.split('#')[1] ?? '', // Extract heading
               lines: block.lines
-            }
+            } as BlockMetadata
           };
         })
         .filter(item => item.vec.length > 0);
       
       // Find nearest neighbors at block level
-      const neighbors = findNearestNeighbors(
+      const neighbors = findNearestNeighbors<BlockMetadata>(
         queryEmbedding,
         blockVectors,
         maxResults,
@@ -273,10 +281,10 @@ export class SmartSearchEngine {
         if (!seen.has(normalizedKey) || neighbor.similarity > seen.get(normalizedKey)!.similarity) {
           seen.set(normalizedKey, {
             key: neighbor.id,
-            path: neighbor.metadata.path,
-            block: neighbor.metadata.block,
+            path: neighbor.metadata?.path ?? '',
+            block: neighbor.metadata?.block ?? '',
             similarity: neighbor.similarity,
-            lines: neighbor.metadata.lines
+            lines: neighbor.metadata?.lines ?? [0, 0]
           });
         }
       }
@@ -306,29 +314,36 @@ export class SmartSearchEngine {
   /**
    * Get Smart Connections' embedding model from the global environment
    */
-  private getSmartConnectionsEmbedModel(): any {
+  private getSmartConnectionsEmbedModel(): SmartEmbedModel | null {
     // Check for Smart Connections' global smart_env
-    const win = window as any;
-    return win.smart_env?.smart_sources?.embed_model ||
-           win.smart_env?.embedding_models?.default?.instance ||
+    interface WindowWithSmartEnv {
+      smart_env?: {
+        smart_sources?: { embed_model?: SmartEmbedModel };
+        embedding_models?: { default?: { instance?: SmartEmbedModel } };
+      };
+    }
+    const win = window as WindowWithSmartEnv;
+    return win.smart_env?.smart_sources?.embed_model ??
+           win.smart_env?.embedding_models?.default?.instance ??
            null;
   }
   
   /**
    * Embed query text using Smart Connections' model
    */
-  private async embedQuery(model: any, text: string): Promise<number[]> {
+  private async embedQuery(model: SmartEmbedModel, text: string): Promise<number[]> {
     try {
       // Smart Connections embed_model has an embed_batch method
       if (typeof model.embed_batch === 'function') {
         const results = await model.embed_batch([{ embed_input: text }]);
-        return results[0]?.vec || [];
+        return results[0]?.vec ?? [];
       }
       
       // Fallback: try embed method
       if (typeof model.embed === 'function') {
         const result = await model.embed(text);
-        return result?.vec || result || [];
+        if (Array.isArray(result)) return result;
+        return result?.vec ?? [];
       }
       
       throw new Error('Embedding model does not have embed_batch or embed method');
