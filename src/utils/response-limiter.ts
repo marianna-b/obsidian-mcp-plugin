@@ -2,6 +2,31 @@ import { createHash } from 'crypto';
 import { ensureStringContent } from './content-handler';
 
 /**
+ * Represents a search result item with optional fields
+ */
+interface SearchResultItem {
+  path?: string;
+  filename?: string;
+  title?: string;
+  basename?: string;
+  score?: number;
+  content?: string;
+  context?: string;
+}
+
+/**
+ * A processed/minimal search result
+ */
+interface MinimalResult {
+  path: string;
+  title: string;
+  score?: number;
+  preview?: string;
+  contentHash?: string;
+  contentLength?: number;
+}
+
+/**
  * Configuration for response limiting
  */
 export interface ResponseLimiterConfig {
@@ -61,56 +86,59 @@ export function truncateContent(
  * Process search results to limit response size
  */
 export function limitSearchResults(
-  results: any[],
+  results: unknown[],
   config: ResponseLimiterConfig = DEFAULT_LIMITER_CONFIG
 ): {
-  results: any[];
+  results: unknown[];
   truncated: boolean;
   originalCount: number;
 } {
   const originalCount = results.length;
   let currentTokens = 0;
-  const processedResults: any[] = [];
+  const processedResults: unknown[] = [];
   let truncated = false;
   
-  for (const result of results) {
+  for (const rawResult of results) {
+    // Treat each result as a SearchResultItem
+    const result = rawResult as SearchResultItem;
+
     // Create a minimal result object
-    const minimalResult: any = {
+    const minimalResult: MinimalResult = {
       path: result.path || result.filename || '',
       title: result.title || result.basename || result.path?.split('/').pop()?.replace(/\.(md|png|jpg|jpeg|gif|svg|pdf|txt|json)$/i, '') || ''
     };
-    
+
     // Add score if available
     if (typeof result.score === 'number') {
       minimalResult.score = result.score;
     }
-    
+
     // Process content
     if (result.content || result.context) {
-      const rawContent = result.content || result.context;
+      const rawContent: unknown = result.content || result.context;
       // Ensure content is a string for truncation and hashing
       const fullContent = ensureStringContent(rawContent, 'response-limiter');
       const preview = truncateContent(fullContent, config.contentPreviewLength);
       minimalResult.preview = preview;
-      
+
       if (config.includeContentHash) {
         minimalResult.contentHash = hashContent(fullContent);
       }
-      
+
       // Store original content length for reference
       minimalResult.contentLength = fullContent.length;
     }
-    
+
     // Estimate tokens for this result
     const resultJson = JSON.stringify(minimalResult);
     const resultTokens = estimateTokens(resultJson);
-    
+
     // Check if adding this result would exceed limit
     if (currentTokens + resultTokens > config.maxTokens) {
       truncated = true;
       break;
     }
-    
+
     processedResults.push(minimalResult);
     currentTokens += resultTokens;
   }
@@ -126,9 +154,9 @@ export function limitSearchResults(
  * Process any response to ensure it fits within token limits
  */
 export function limitResponse(
-  response: any,
+  response: unknown,
   config: ResponseLimiterConfig = DEFAULT_LIMITER_CONFIG
-): any {
+): unknown {
   const responseStr = JSON.stringify(response);
   const tokens = estimateTokens(responseStr);
   
@@ -142,7 +170,7 @@ export function limitResponse(
     return limitArrayResponse(response, config);
   } else if (typeof response === 'object' && response !== null) {
     // Handle object responses
-    return limitObjectResponse(response, config);
+    return limitObjectResponse(response as Record<string, unknown>, config);
   }
   
   // For other types, just truncate
@@ -152,8 +180,8 @@ export function limitResponse(
 /**
  * Limit array responses
  */
-function limitArrayResponse(arr: any[], config: ResponseLimiterConfig): any[] {
-  const limited: any[] = [];
+function limitArrayResponse(arr: unknown[], config: ResponseLimiterConfig): unknown[] {
+  const limited: unknown[] = [];
   let currentTokens = 2; // For array brackets
   
   for (const item of arr) {
@@ -174,22 +202,22 @@ function limitArrayResponse(arr: any[], config: ResponseLimiterConfig): any[] {
 /**
  * Limit object responses
  */
-function limitObjectResponse(obj: any, config: ResponseLimiterConfig): any {
-  const limited: any = {};
+function limitObjectResponse(obj: Record<string, unknown>, config: ResponseLimiterConfig): Record<string, unknown> {
+  const limited: Record<string, unknown> = {};
   let currentTokens = 2; // For object brackets
-  
+
   // Prioritize certain keys
   const priorityKeys = ['error', 'message', 'path', 'title', 'query', 'page', 'totalResults'];
   const otherKeys = Object.keys(obj).filter(k => !priorityKeys.includes(k));
   const allKeys = [...priorityKeys.filter(k => k in obj), ...otherKeys];
-  
+
   for (const key of allKeys) {
     if (!(key in obj)) continue;
-    
-    const value = obj[key];
+
+    const value: unknown = obj[key];
     const entryStr = JSON.stringify({ [key]: value });
     const entryTokens = estimateTokens(entryStr);
-    
+
     if (currentTokens + entryTokens > config.maxTokens) {
       // Try to add a truncation notice
       if (currentTokens + 50 < config.maxTokens) {
@@ -197,11 +225,11 @@ function limitObjectResponse(obj: any, config: ResponseLimiterConfig): any {
       }
       break;
     }
-    
+
     limited[key] = value;
     currentTokens += entryTokens;
   }
-  
+
   return limited;
 }
 
@@ -233,34 +261,30 @@ export function paginateResults<T>(
   
   const paginatedResults = limitedResults.slice(startIndex, endIndex);
   
-  const response: any = {
-    results: paginatedResults,
+  return {
+    results: paginatedResults as T[],
     page,
     pageSize,
     totalResults,
-    totalPages
+    totalPages,
+    ...(truncated ? {
+      truncated: true,
+      originalCount,
+      message: `Results limited to prevent token overflow. Showing ${limitedResults.length} of ${originalCount} total results.`
+    } : {})
   };
-  
-  // Add truncation metadata if results were limited
-  if (truncated) {
-    response.truncated = true;
-    response.originalCount = originalCount;
-    response.message = `Results limited to prevent token overflow. Showing ${limitedResults.length} of ${originalCount} total results.`;
-  }
-  
-  return response;
 }
 
 /**
  * Paginate file list with metadata
  */
-export function paginateFiles(
-  files: any[],
+export function paginateFiles<T>(
+  files: T[],
   page: number = 1,
   pageSize: number = 20,
   directory?: string
 ): {
-  files: any[];
+  files: T[];
   page: number;
   pageSize: number;
   totalFiles: number;

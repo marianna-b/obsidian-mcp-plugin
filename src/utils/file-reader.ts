@@ -11,16 +11,16 @@ interface FileReadOptions {
 }
 
 interface FileReadResult {
-  content?: any;
-  metadata?: any;
+  content?: unknown;
+  metadata?: unknown;
   originalContentLength?: number;
   fragmentMetadata?: {
     totalFragments: number;
     strategy: string;
     query: string;
   };
-  workflow?: any;
-  efficiency_hints?: any;
+  workflow?: unknown;
+  efficiency_hints?: unknown;
   warning?: string;
   // For image files
   base64Data?: string;
@@ -48,14 +48,14 @@ export async function readFileWithFragments(
   
   // Extract content from the response
   let fileContent: string;
-  let metadata: any = {};
+  let metadata: Record<string, unknown> = {};
   
   if (typeof fileResponse === 'string') {
     fileContent = fileResponse;
   } else if (fileResponse && typeof fileResponse === 'object' && 'content' in fileResponse) {
     // Handle structured response from Obsidian API
     fileContent = fileResponse.content;
-    metadata = fileResponse;
+    metadata = { ...fileResponse };
     
     // If it's still not a string (might be an image or binary file)
     if (typeof fileContent !== 'string') {
@@ -84,11 +84,11 @@ export async function readFileWithFragments(
   
   // Use fragment retrieval
   const docId = `file:${path}`;
-  await fragmentRetriever.indexDocument(docId, path, fileContent);
+  fragmentRetriever.indexDocument(docId, path, fileContent);
   
   // Retrieve relevant fragments based on query or path
   const fragmentQuery = query || path.split('/').pop()?.replace('.md', '') || '';
-  const fragmentResponse = await fragmentRetriever.retrieveFragments(fragmentQuery, {
+  const fragmentResponse = fragmentRetriever.retrieveFragments(fragmentQuery, {
     strategy: strategy || 'auto',
     maxFragments: maxFragments || 5
   });

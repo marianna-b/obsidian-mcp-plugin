@@ -8,8 +8,7 @@ import {
   divider,
   tip,
   summaryFooter,
-  joinLines,
-  formatPath
+  joinLines
 } from './utils';
 
 /**
@@ -280,6 +279,224 @@ export function formatGraphStats(response: GraphStatsResponse): string {
 
   lines.push(divider());
   lines.push(tip('Use `graph.neighbors(path)` to see the actual connections'));
+  lines.push(summaryFooter());
+
+  return joinLines(lines);
+}
+
+/**
+ * Format graph.tag-analysis response
+ */
+export interface TagAnalysisTag {
+  tag: string;
+  count: number;
+  files?: string[];
+}
+
+export interface TagAnalysisResponse {
+  folderFilter?: string;
+  totalTags: number;
+  totalFiles: number;
+  tags: TagAnalysisTag[];
+}
+
+export function formatTagAnalysis(response: TagAnalysisResponse): string {
+  const lines: string[] = [];
+
+  lines.push(header(1, 'Tag Analysis'));
+  lines.push('');
+
+  if (response.folderFilter) {
+    lines.push(property('Folder', response.folderFilter, 0));
+  }
+  lines.push(property('Total Tags', response.totalTags.toString(), 0));
+  lines.push(property('Total Files', response.totalFiles.toString(), 0));
+  lines.push('');
+
+  if (response.tags.length === 0) {
+    lines.push('No tags found.');
+    lines.push(summaryFooter());
+    return joinLines(lines);
+  }
+
+  lines.push(header(2, 'Tags by Frequency'));
+  lines.push('');
+
+  // Sort by count descending
+  const sorted = [...response.tags].sort((a, b) => b.count - a.count);
+
+  sorted.slice(0, 30).forEach((tag, i) => {
+    lines.push(`${i + 1}. **${tag.tag}** (${tag.count} files)`);
+    if (tag.files && tag.files.length > 0) {
+      const preview = tag.files.slice(0, 3).map(f => f.split('/').pop()).join(', ');
+      lines.push(`   ${preview}${tag.files.length > 3 ? '...' : ''}`);
+    }
+  });
+
+  if (sorted.length > 30) {
+    lines.push(`\n... and ${sorted.length - 30} more tags`);
+  }
+
+  lines.push('');
+  lines.push(divider());
+  lines.push(tip('Use `vault.search(query, tag: "#tagname")` to find files with a specific tag'));
+  lines.push(summaryFooter());
+
+  return joinLines(lines);
+}
+
+/**
+ * Format graph.shared-tags response
+ */
+export interface SharedTagsResult {
+  file1: string;
+  file2: string;
+  sharedTags: string[];
+  similarity: number;
+}
+
+export interface SharedTagsResponse {
+  sourcePath: string;
+  results: SharedTagsResult[];
+  totalMatches: number;
+}
+
+export function formatSharedTags(response: SharedTagsResponse): string {
+  const lines: string[] = [];
+
+  const fileName = response.sourcePath.split('/').pop() || response.sourcePath;
+  lines.push(header(1, `Shared Tags: ${fileName}`));
+  lines.push('');
+  lines.push(property('Source', response.sourcePath, 0));
+  lines.push(property('Matches', response.totalMatches.toString(), 0));
+  lines.push('');
+
+  if (response.results.length === 0) {
+    lines.push('No files share tags with this file.');
+    lines.push(summaryFooter());
+    return joinLines(lines);
+  }
+
+  lines.push(header(2, 'Related Files'));
+  lines.push('');
+
+  response.results.slice(0, 20).forEach((result, i) => {
+    const otherFile = result.file1 === response.sourcePath ? result.file2 : result.file1;
+    const otherName = otherFile.split('/').pop() || otherFile;
+    const similarity = Math.round(result.similarity * 100);
+
+    lines.push(`${i + 1}. **${otherName}** (${similarity}% similar)`);
+    lines.push(`   Shared: ${result.sharedTags.slice(0, 5).join(', ')}${result.sharedTags.length > 5 ? '...' : ''}`);
+  });
+
+  if (response.results.length > 20) {
+    lines.push(`\n... and ${response.results.length - 20} more matches`);
+  }
+
+  lines.push('');
+  lines.push(divider());
+  lines.push(tip('Use `graph.path(source, target)` to find connection paths between files'));
+  lines.push(summaryFooter());
+
+  return joinLines(lines);
+}
+
+/**
+ * Format graph.search-traverse response
+ */
+export interface SearchTraverseSnippet {
+  text: string;
+  score: string | number;
+  lineNumber: number;
+  preview: string;
+}
+
+export interface SearchTraverseNode {
+  file: string;
+  depth: number;
+  parent?: string;
+  connectionType?: string;
+  snippet: SearchTraverseSnippet;
+}
+
+export interface SearchTraverseResponse {
+  summary: string;
+  traversalPath: string;
+  details: {
+    startNode: string;
+    searchQuery: string;
+    maxDepth: number;
+    totalNodesVisited: number;
+    nodesWithMatches: number;
+    executionTime: string;
+    tagConnectionsFollowed?: number;
+  };
+  snippetChain: SearchTraverseNode[];
+  workflowSuggestions: string[];
+}
+
+export function formatSearchTraverse(response: SearchTraverseResponse): string {
+  const lines: string[] = [];
+
+  lines.push(header(1, `Search Traverse: "${response.details.searchQuery}"`));
+  lines.push('');
+  lines.push(response.summary);
+  lines.push('');
+
+  lines.push(property('Start', response.details.startNode, 0));
+  lines.push(property('Depth', response.details.maxDepth.toString(), 0));
+  lines.push(property('Visited', response.details.totalNodesVisited.toString(), 0));
+  lines.push(property('Matches', response.details.nodesWithMatches.toString(), 0));
+  lines.push(property('Time', response.details.executionTime, 0));
+  if (response.details.tagConnectionsFollowed) {
+    lines.push(property('Tag Connections', response.details.tagConnectionsFollowed.toString(), 0));
+  }
+  lines.push('');
+
+  if (response.snippetChain.length === 0) {
+    lines.push('No matching snippets found along the traversal path.');
+    lines.push('');
+    lines.push(tip('Try broadening your search query or increasing maxDepth'));
+    lines.push(summaryFooter());
+    return joinLines(lines);
+  }
+
+  lines.push(header(2, 'Traversal Path'));
+  lines.push('');
+
+  // Render each node in the chain with its snippet
+  response.snippetChain.forEach((node, i) => {
+    const indent = '  '.repeat(node.depth);
+    const icon = i === 0 ? '**[start]**' : node.connectionType === 'tag' ? '**[tag]**' : '**[link]**';
+    const fileName = node.file.split('/').pop() || node.file;
+    const score = typeof node.snippet.score === 'number'
+      ? node.snippet.score.toFixed(3)
+      : node.snippet.score;
+
+    lines.push(`${indent}${icon} **${fileName}** (score: ${score}, line ${node.snippet.lineNumber})`);
+    lines.push(`${indent}  ${node.file}`);
+
+    // Show snippet preview as indented quote
+    const preview = node.snippet.preview || node.snippet.text;
+    const previewLines = preview.split('\n').slice(0, 3);
+    previewLines.forEach(line => {
+      lines.push(`${indent}  > ${line}`);
+    });
+
+    if (i < response.snippetChain.length - 1) {
+      lines.push(`${indent}  ↓`);
+    }
+    lines.push('');
+  });
+
+  // Workflow suggestions
+  if (response.workflowSuggestions.length > 0) {
+    lines.push(divider());
+    response.workflowSuggestions.forEach(suggestion => {
+      lines.push(tip(suggestion));
+    });
+  }
+
   lines.push(summaryFooter());
 
   return joinLines(lines);

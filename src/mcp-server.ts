@@ -1,61 +1,124 @@
 import express from 'express';
 import cors from 'cors';
 import { App, Notice } from 'obsidian';
-import { Server } from 'http';
+import { createServer as createHttpServer, Server, IncomingMessage, ServerResponse } from 'http';
 import { Server as HttpsServer } from 'https';
 import { Server as MCPServer } from '@modelcontextprotocol/sdk/server/index.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-import { 
-  ListToolsRequestSchema,
-  CallToolRequestSchema,
-  ListResourcesRequestSchema,
-  ReadResourceRequestSchema,
-  isInitializeRequest,
-  type CallToolResult,
-  type Tool
+import {
+  isInitializeRequest
 } from '@modelcontextprotocol/sdk/types.js';
 import { randomUUID } from 'crypto';
 import * as path from 'path';
 import { getVersion } from './version';
 import { ObsidianAPI } from './utils/obsidian-api';
 import { SecureObsidianAPI, VaultSecurityManager } from './security';
-import { semanticTools, createSemanticTools } from './tools/semantic-tools';
-import { DataviewTool, isDataviewToolAvailable } from './tools/dataview-tool';
+import { semanticTools } from './tools/semantic-tools';
 import { Debug } from './utils/debug';
 import { ConnectionPool, PooledRequest } from './utils/connection-pool';
 import { SessionManager } from './utils/session-manager';
-import { WorkerManager } from './utils/worker-manager';
 import { MCPServerPool } from './utils/mcp-server-pool';
 import { CertificateManager, CertificateConfig } from './utils/certificate-manager';
+
+/** Minimal plugin interface for MCPHttpServer.
+ * Includes fields from SecurePluginRef and ObsidianAPIPluginRef so the same object
+ * can be passed through the constructor chain. */
+interface MCPPluginRef {
+  settings?: {
+    httpsEnabled?: boolean;
+    httpsPort?: number;
+    httpPort?: number;
+    certificateConfig?: CertificateConfig;
+    readOnlyMode?: boolean;
+    apiKey?: string;
+    dangerouslyDisableAuth?: boolean;
+    // From SecurePluginRef (for SecureObsidianAPI)
+    security?: Partial<import('./security/vault-security-manager').SecuritySettings>;
+    // From ObsidianAPIPluginRef (for ObsidianAPI)
+    validation?: Partial<import('./validation/input-validator').ValidationConfig>;
+  };
+  manifest: { dir?: string };
+  // From ObsidianAPIPluginRef
+  ignoreManager?: import('./security/mcp-ignore-manager').MCPIgnoreManager;
+  mcpServer?: { isServerRunning(): boolean; getConnectionCount(): number };
+}
+
+/** JSON-RPC request body structure */
+interface JsonRpcRequest {
+  jsonrpc?: string;
+  id?: string | number | null;
+  method?: string;
+  params?: Record<string, unknown>;
+}
+
+/** Server with configurable timeout properties (Node.js http.Server internals) */
+interface ServerWithTimeouts {
+  keepAliveTimeout: number;
+  headersTimeout: number;
+  requestTimeout: number;
+  setTimeout: (msecs: number) => unknown;
+}
+
+/** Null response shim for internal initialize calls */
+interface NullResponse {
+  writeHead: (status: number, headers?: Record<string, string>) => void;
+  setHeader: (k: string, v: string) => void;
+  getHeader: (k: string) => string | undefined;
+  statusCode: number;
+  headersSent: boolean;
+  write: (chunk: unknown) => void;
+  end: (data?: unknown) => void;
+  on: (event: string, handler: (...args: unknown[]) => void) => void;
+  once: (event: string, handler: (...args: unknown[]) => void) => void;
+  status: (v: number) => NullResponse;
+  json: (body: unknown) => void;
+  send: (body?: unknown) => void;
+}
+
+/** Connection pool stats response */
+interface ConnectionPoolStatsResponse {
+  enabled: boolean;
+  stats?: {
+    activeConnections: number;
+    queuedRequests: number;
+    maxConnections: number;
+    utilization: number;
+  };
+  serverPoolStats?: {
+    activeServers: number;
+    maxServers: number;
+    utilization: string;
+    totalRequests: number;
+  };
+}
 
 
 export class MCPHttpServer {
   private app: express.Application;
   private server?: Server | HttpsServer;
-  private mcpServer?: MCPServer; // Single server for non-concurrent mode
-  private mcpServerPool?: MCPServerPool; // Server pool for concurrent mode
+  private mcpServerPool!: MCPServerPool;
   private transports: Map<string, StreamableHTTPServerTransport> = new Map();
   private obsidianApp: App;
   private obsidianAPI: ObsidianAPI;
   private port: number;
   private isRunning: boolean = false;
   private connectionCount: number = 0;
-  private plugin?: any; // Reference to the plugin
+  private plugin?: MCPPluginRef; // Reference to the plugin
   private connectionPool?: ConnectionPool;
   private sessionManager?: SessionManager;
   private certificateManager: CertificateManager | null;
   private isHttps: boolean = false;
 
-  constructor(obsidianApp: App, port: number = 3001, plugin?: any) {
+  constructor(obsidianApp: App, port: number = 3001, plugin?: MCPPluginRef) {
     this.obsidianApp = obsidianApp;
     this.port = port;
     this.plugin = plugin;
-    
+
     // Only initialize certificate manager if HTTPS is enabled
     // to avoid fs module issues in browser environment
     if (plugin?.settings?.httpsEnabled && plugin?.settings?.certificateConfig?.enabled) {
       this.isHttps = true;
-      this.port = plugin.settings.httpsPort || 3443;
+      this.port = plugin.settings.httpsPort ?? 3443;
       // Lazy initialize certificate manager only when needed
       this.certificateManager = null; // Will be initialized when server starts
     } else {
@@ -92,53 +155,49 @@ export class MCPHttpServer {
     // Always use SecureObsidianAPI for consistent security layer
     this.obsidianAPI = new SecureObsidianAPI(obsidianApp, undefined, plugin, securitySettings);
     
-    // Initialize connection pool and session manager if concurrent sessions are enabled
-    if (plugin?.settings?.enableConcurrentSessions) {
-      const maxConnections = plugin.settings.maxConcurrentConnections || 32;
-      
-      // Initialize session manager
-      this.sessionManager = new SessionManager({
-        maxSessions: maxConnections,
-        sessionTimeout: 3600000, // 1 hour
-        checkInterval: 60000 // Check every minute
-      });
-      this.sessionManager.start();
-      
-      // Handle session events
-      this.sessionManager.on('session-evicted', ({ session, reason }) => {
-        // Clean up transport for evicted session
-        const transport = this.transports.get(session.sessionId);
-        if (transport) {
-          transport.close();
-          this.transports.delete(session.sessionId);
-          this.connectionCount = Math.max(0, this.connectionCount - 1);
-          Debug.log(`🔚 Evicted session ${session.sessionId} (${reason}). Connections: ${this.connectionCount}`);
-        }
-      });
-      
-      // Initialize connection pool
-      this.connectionPool = new ConnectionPool({
-        maxConnections,
-        maxQueueSize: 100,
-        requestTimeout: 30000,
-        sessionTimeout: 3600000,
-        sessionCheckInterval: 60000,
-        workerScript: path.join(plugin.manifest.dir, 'dist', 'workers', 'semantic-worker.js')
-      });
-      this.connectionPool.initialize();
-      
-      // Set up connection pool request processing
-      this.connectionPool.on('process', async (request: PooledRequest) => {
+    // Initialize connection pool and session manager (always concurrent)
+    const maxConnections = 32;
+
+    this.sessionManager = new SessionManager({
+      maxSessions: maxConnections,
+      sessionTimeout: 3600000, // 1 hour
+      checkInterval: 60000 // Check every minute
+    });
+    this.sessionManager.start();
+
+    // Handle session events
+    this.sessionManager.on('session-evicted', (data: { session: { sessionId: string }; reason: string }) => {
+      const transport = this.transports.get(data.session.sessionId);
+      if (transport) {
+        void transport.close();
+        this.transports.delete(data.session.sessionId);
+        this.connectionCount = Math.max(0, this.connectionCount - 1);
+        Debug.log(`🔚 Evicted session ${data.session.sessionId} (${data.reason}). Connections: ${this.connectionCount}`);
+      }
+    });
+
+    // Initialize connection pool
+    this.connectionPool = new ConnectionPool({
+      maxConnections,
+      maxQueueSize: 100,
+      requestTimeout: 30000,
+      sessionTimeout: 3600000,
+      sessionCheckInterval: 60000,
+      workerScript: path.join(plugin?.manifest.dir ?? '', 'dist', 'workers', 'semantic-worker.js')
+    });
+    void this.connectionPool.initialize();
+
+    // Set up connection pool request processing
+    this.connectionPool.on('process', (request: PooledRequest) => {
+      void (async () => {
         try {
-          // Touch session to update activity
           if (request.sessionId && this.sessionManager) {
             this.sessionManager.touchSession(request.sessionId);
           }
-          
-          // Extract tool name from method
+
           const toolName = request.method.replace('tool.', '');
           const tool = semanticTools.find(t => t.name === toolName);
-          
+
           if (!tool) {
             this.connectionPool!.completeRequest(request.id, {
               id: request.id,
@@ -146,16 +205,11 @@ export class MCPHttpServer {
             });
             return;
           }
-          
-          // Create session-specific API instance if needed
+
           const sessionAPI = this.getSessionAPI(request.sessionId);
-          
-          // Check if this operation needs data preparation for worker threads
-          const preparedContext = await this.prepareWorkerContext(request);
-          
-          // Execute tool with session context
+          this.prepareWorkerContext(request);
           const result = await tool.handler(sessionAPI, request.params);
-          
+
           this.connectionPool!.completeRequest(request.id, {
             id: request.id,
             result
@@ -166,152 +220,18 @@ export class MCPHttpServer {
             error
           });
         }
-      });
-      
-      // Initialize MCP Server Pool for concurrent sessions
-      this.mcpServerPool = new MCPServerPool(this.obsidianAPI, maxConnections, plugin);
-      
-      // Set contexts for session-info resource
-      this.mcpServerPool.setContexts(this.sessionManager, this.connectionPool);
-      
-      Debug.log(`🏊 Connection pool initialized with max ${maxConnections} connections`);
-    } else {
-      // Initialize single MCP Server for non-concurrent mode
-      this.mcpServer = new MCPServer(
-        {
-          name: 'Semantic Notes Vault MCP',
-          version: getVersion()
-        },
-        {
-          capabilities: {
-            tools: {},
-            resources: {}
-          }
-        }
-      );
-      this.setupMCPHandlers();
-    }
+      })();
+    });
+
+    // Initialize MCP Server Pool
+    this.mcpServerPool = new MCPServerPool(this.obsidianAPI, maxConnections, plugin);
+    this.mcpServerPool.setContexts(this.sessionManager, this.connectionPool);
+
+    Debug.log(`🏊 Connection pool initialized with max ${maxConnections} connections`);
     
     this.app = express();
     this.setupMiddleware();
     this.setupRoutes();
-  }
-
-  private setupMCPHandlers(): void {
-    // Only set up handlers for non-concurrent mode
-    // In concurrent mode, each server in the pool has its own handlers
-    if (!this.mcpServer) return;
-    
-    // Register semantic tools following the proven pattern from obsidian-semantic-mcp
-    // Use dynamic tool creation to include Dataview and Smart Connections if available
-    this.mcpServer.setRequestHandler(ListToolsRequestSchema, async () => {
-      const availableTools = await createSemanticTools(this.obsidianAPI, this.plugin?.settings);
-      return {
-        tools: availableTools.map(tool => ({
-          name: tool.name,
-          description: tool.description,
-          inputSchema: tool.inputSchema
-        }))
-      };
-    });
-
-    // Handle tool calls
-    this.mcpServer.setRequestHandler(CallToolRequestSchema, async (request, context): Promise<CallToolResult> => {
-      const { name, arguments: args } = request.params;
-      
-      const availableTools = await createSemanticTools(this.obsidianAPI, this.plugin?.settings);
-      const tool = availableTools.find(t => t.name === name);
-      if (!tool) {
-        throw new Error(`Tool not found: ${name}`);
-      }
-      
-      Debug.log(`🔧 Executing semantic tool: ${name} with action: ${args?.action}`);
-      return await tool.handler(this.obsidianAPI, args);
-    });
-
-    // Handle resource listing
-    this.mcpServer.setRequestHandler(ListResourcesRequestSchema, async () => {
-      const resources = [
-        {
-          uri: 'obsidian://vault-info',
-          name: 'Vault Information',
-          description: 'Current vault status, file counts, and metadata',
-          mimeType: 'application/json'
-        }
-      ];
-
-      // Add Dataview reference resource if plugin is available
-      if (isDataviewToolAvailable(this.obsidianAPI)) {
-        resources.push({
-          uri: 'obsidian://dataview-reference',
-          name: 'Dataview Query Language Reference',
-          description: 'Complete DQL syntax guide with examples, functions, and best practices',
-          mimeType: 'text/markdown'
-        });
-      }
-      
-      return { resources };
-    });
-
-    // Handle resource reading
-    this.mcpServer.setRequestHandler(ReadResourceRequestSchema, async (request, context) => {
-      const { uri } = request.params;
-      
-      if (uri === 'obsidian://vault-info') {
-        const vaultName = this.obsidianApp.vault.getName();
-        const activeFile = this.obsidianApp.workspace.getActiveFile();
-        const allFiles = this.obsidianApp.vault.getAllLoadedFiles();
-        const markdownFiles = this.obsidianApp.vault.getMarkdownFiles();
-        
-        const vaultInfo = {
-          vault: {
-            name: vaultName,
-            path: (this.obsidianApp.vault.adapter as any).basePath || 'Unknown'
-          },
-          activeFile: activeFile ? {
-            name: activeFile.name,
-            path: activeFile.path,
-            basename: activeFile.basename,
-            extension: activeFile.extension
-          } : null,
-          files: {
-            total: allFiles.length,
-            markdown: markdownFiles.length,
-            attachments: allFiles.length - markdownFiles.length
-          },
-          plugin: {
-            version: getVersion(),
-            status: 'Connected and operational',
-            transport: 'HTTP MCP via Express.js + MCP SDK'
-          },
-          timestamp: new Date().toISOString()
-        };
-
-        return {
-          contents: [{
-            uri,
-            mimeType: 'application/json',
-            text: JSON.stringify(vaultInfo, null, 2)
-          }]
-        };
-      }
-
-      if (uri === 'obsidian://dataview-reference') {
-        if (!isDataviewToolAvailable(this.obsidianAPI)) {
-          throw new Error('Dataview plugin is not available');
-        }
-
-        return {
-          contents: [{
-            uri,
-            mimeType: 'text/markdown',
-            text: DataviewTool.generateDataviewReference()
-          }]
-        };
-      }
-      
-      throw new Error(`Resource not found: ${uri}`);
-    });
   }
 
   private setupMiddleware(): void {
@@ -343,11 +263,11 @@ export class MCPHttpServer {
       }
       
       // Check if auth is disabled
-      if (this.plugin?.settings?.dangerouslyDisableAuth) {
+      if (this.plugin?.settings?.dangerouslyDisableAuth === true) {
         Debug.log('⚠️ Authentication is DISABLED - allowing access without credentials');
         return next();
       }
-      
+
       const apiKey = this.plugin?.settings?.apiKey;
       if (!apiKey) {
         // No API key configured, allow access (backward compatibility)
@@ -412,7 +332,7 @@ export class MCPHttpServer {
 
     // MCP discovery endpoints
     this.app.get('/.well-known/appspecific/com.mcp.obsidian-mcp', (req, res) => {
-      const isHttps = this.plugin?.settings?.httpsEnabled || false;
+      const isHttps = this.plugin?.settings?.httpsEnabled === true;
       const protocol = isHttps ? 'https' : 'http';
       res.json({
         endpoint: `${protocol}://localhost:${this.port}/mcp`,
@@ -434,17 +354,17 @@ export class MCPHttpServer {
     });
 
     // MCP protocol endpoint - using StreamableHTTPServerTransport
-    this.app.post('/mcp', async (req, res) => {
-      await this.handleMCPRequest(req, res);
+    this.app.post('/mcp', (req, res) => {
+      void this.handleMCPRequest(req, res);
     });
 
     // Handle session deletion
     this.app.delete('/mcp', (req, res) => {
       const sessionId = req.headers['mcp-session-id'] as string;
-      
+
       if (sessionId && this.transports.has(sessionId)) {
         const transport = this.transports.get(sessionId)!;
-        transport.close();
+        void transport.close();
         this.transports.delete(sessionId);
         this.connectionCount = Math.max(0, this.connectionCount - 1);
         Debug.log(`🔚 Closed MCP session: ${sessionId} (Remaining: ${this.connectionCount})`);
@@ -455,13 +375,13 @@ export class MCPHttpServer {
     });
   }
 
-  private async handleMCPRequest(req: any, res: any): Promise<void> {
+  private async handleMCPRequest(req: express.Request, res: express.Response): Promise<void> {
     try {
-      const request = req.body;
-      
+      const request = req.body as JsonRpcRequest | undefined;
+
       // Get or create session ID
       const sessionId = req.headers['mcp-session-id'] as string | undefined;
-      Debug.log(`📨 MCP Request: ${request.method}${sessionId ? ` [Session: ${sessionId}]` : ''}`, request.params);
+      Debug.log(`📨 MCP Request: ${request?.method ?? 'unknown'}${sessionId ? ` [Session: ${sessionId}]` : ''}`, request?.params);
       // Quick path: lightweight ping to keep session alive
       if (request?.method === 'session/ping' || request?.method === 'status/ping') {
         if (sessionId && this.sessionManager) {
@@ -478,14 +398,14 @@ export class MCPHttpServer {
       if (sessionId) {
         effectiveSessionId = sessionId;
       }
-      let mcpServer: MCPServer;
+          let mcpServer: MCPServer;
 
       // Helper: create a null response shim so we can send an internal initialize
-      const createNullRes = () => {
+      const createNullRes = (): NullResponse => {
         const headers: Record<string, string> = {};
         let sent = false;
         let code = 200;
-        const resp: any = {
+        const resp: NullResponse = {
           // Node-style response interface (minimal no-op implementation)
           writeHead: (_status: number, _headers?: Record<string, string>) => { code = _status; sent = true; },
           setHeader: (k: string, v: string) => { headers[k] = v; },
@@ -493,16 +413,16 @@ export class MCPHttpServer {
           get statusCode() { return code; },
           set statusCode(v: number) { code = v; },
           get headersSent() { return sent; },
-          write: (_chunk: any) => { /* no-op */ },
-          end: (_data?: any) => { sent = true; },
-          on: (_event: string, _handler: (...args: any[]) => void) => { /* no-op */ },
-          once: (_event: string, _handler: (...args: any[]) => void) => { /* no-op */ },
+          write: (_chunk: unknown) => { /* no-op */ },
+          end: (_data?: unknown) => { sent = true; },
+          on: (_event: string, _handler: (...args: unknown[]) => void) => { /* no-op */ },
+          once: (_event: string, _handler: (...args: unknown[]) => void) => { /* no-op */ },
           // Express-like helpers (used by some wrappers)
           status: (v: number) => { code = v; return resp; },
-          json: (_body: any) => { sent = true; },
-          send: (_body?: any) => { sent = true; },
+          json: (_body: unknown) => { sent = true; },
+          send: (_body?: unknown) => { sent = true; },
         };
-        return resp as any;
+        return resp;
       };
       // When a non-initialize request arrives without an active transport,
       // we return a JSON-RPC error instructing the client to initialize using
@@ -512,31 +432,31 @@ export class MCPHttpServer {
       // Helper: register transport with lifecycle hooks
       const attachTransportHandlers = (sessId: string, tr: StreamableHTTPServerTransport) => {
         try {
-          // @ts-ignore optional event emitter API on transport
-          tr.on?.('close', () => {
-            if (this.transports.has(sessId)) {
-              this.transports.delete(sessId);
-              this.connectionCount = Math.max(0, this.connectionCount - 1);
-              Debug.log(`🔌 Transport closed for session ${sessId}. Connections: ${this.connectionCount}`);
-            }
-          });
-          // @ts-ignore optional event emitter API on transport
-          tr.on?.('error', (e: any) => {
-            Debug.error(`Transport error for session ${sessId}:`, e);
-            if (this.transports.has(sessId)) {
-              this.transports.delete(sessId);
-              this.connectionCount = Math.max(0, this.connectionCount - 1);
-            }
-          });
+          // Transport may optionally support EventEmitter API
+          const emitter = tr as unknown as { on?: (event: string, handler: (...args: unknown[]) => void) => void };
+          if (typeof emitter.on === 'function') {
+            emitter.on('close', () => {
+              if (this.transports.has(sessId)) {
+                this.transports.delete(sessId);
+                this.connectionCount = Math.max(0, this.connectionCount - 1);
+                Debug.log(`🔌 Transport closed for session ${sessId}. Connections: ${this.connectionCount}`);
+              }
+            });
+            emitter.on('error', (e: unknown) => {
+              Debug.error(`Transport error for session ${sessId}:`, e);
+              if (this.transports.has(sessId)) {
+                this.transports.delete(sessId);
+                this.connectionCount = Math.max(0, this.connectionCount - 1);
+              }
+            });
+          }
         } catch {
           // Transport may not support event emitters, which is fine
         }
       };
 
-      // Determine which server to use
-      if (this.mcpServerPool) {
-        // Concurrent mode - use server pool
-        if (sessionId && this.transports.has(sessionId)) {
+      // Determine which server to use from the pool
+      if (sessionId && this.transports.has(sessionId)) {
           // Use existing transport for this session
           transport = this.transports.get(sessionId)!;
           
@@ -555,20 +475,20 @@ export class MCPHttpServer {
             mcpServer = this.mcpServerPool.getOrCreateServer(sessionId);
             effectiveSessionId = sessionId;
             transport = new StreamableHTTPServerTransport({
-              sessionIdGenerator: () => effectiveSessionId!
+              sessionIdGenerator: () => effectiveSessionId
             });
             await mcpServer.connect(transport);
-            this.transports.set(effectiveSessionId as string, transport);
-            attachTransportHandlers(effectiveSessionId as string, transport);
+            this.transports.set(effectiveSessionId, transport);
+            attachTransportHandlers(effectiveSessionId, transport);
             this.connectionCount++;
             Debug.log(`♻️ Recreated transport for session ${sessionId} (requests: ${session.requestCount})`);
           } else {
             // Create transport and require client initialize on next call
-            const newSessionId = sessionId!; // reuse provided id (guaranteed by branch)
+            const newSessionId = sessionId; // reuse provided id (guaranteed by branch)
             mcpServer = this.mcpServerPool.getOrCreateServer(newSessionId);
             effectiveSessionId = newSessionId;
             transport = new StreamableHTTPServerTransport({
-              sessionIdGenerator: () => effectiveSessionId!
+              sessionIdGenerator: () => effectiveSessionId
             });
             await mcpServer.connect(transport);
             this.transports.set(effectiveSessionId, transport);
@@ -584,7 +504,7 @@ export class MCPHttpServer {
           mcpServer = this.mcpServerPool.getOrCreateServer(effectiveSessionId);
           
           transport = new StreamableHTTPServerTransport({
-            sessionIdGenerator: () => effectiveSessionId!
+            sessionIdGenerator: () => effectiveSessionId
           });
           
           // Connect the MCP server to this transport
@@ -606,7 +526,7 @@ export class MCPHttpServer {
           mcpServer = this.mcpServerPool.getOrCreateServer(newSessionId);
           effectiveSessionId = newSessionId;
           transport = new StreamableHTTPServerTransport({
-            sessionIdGenerator: () => effectiveSessionId!
+            sessionIdGenerator: () => effectiveSessionId
           });
           await mcpServer.connect(transport);
           this.transports.set(effectiveSessionId, transport);
@@ -614,57 +534,6 @@ export class MCPHttpServer {
           this.connectionCount++;
           requireInitializeNotice = true;
         }
-      } else {
-        // Non-concurrent mode - use single MCP server
-        mcpServer = this.mcpServer!;
-        if (sessionId && this.transports.has(sessionId)) {
-          // Use existing transport
-          transport = this.transports.get(sessionId)!;
-          effectiveSessionId = sessionId;
-          if (this.sessionManager) this.sessionManager.touchSession(sessionId);
-        } else if (sessionId) {
-          // No active transport for provided session
-          if (isInitializeRequest(request)) {
-            effectiveSessionId = sessionId;
-            transport = new StreamableHTTPServerTransport({ sessionIdGenerator: () => effectiveSessionId! });
-            await mcpServer.connect(transport);
-            this.transports.set(effectiveSessionId, transport);
-            attachTransportHandlers(effectiveSessionId, transport);
-            this.connectionCount++;
-          } else {
-            effectiveSessionId = sessionId;
-            transport = new StreamableHTTPServerTransport({ sessionIdGenerator: () => effectiveSessionId! });
-            await mcpServer.connect(transport);
-            this.transports.set(effectiveSessionId, transport);
-            attachTransportHandlers(effectiveSessionId, transport);
-            this.connectionCount++;
-            requireInitializeNotice = true;
-          }
-        } else if (!sessionId && isInitializeRequest(request)) {
-          // New initialization request - create new session and transport
-          effectiveSessionId = randomUUID();
-          transport = new StreamableHTTPServerTransport({ sessionIdGenerator: () => effectiveSessionId! });
-          await mcpServer.connect(transport);
-          this.transports.set(effectiveSessionId, transport);
-          attachTransportHandlers(effectiveSessionId, transport);
-          this.connectionCount++;
-          if (this.sessionManager) {
-            this.sessionManager.getOrCreateSession(effectiveSessionId);
-          }
-        } else {
-          // No session header and not an initialize request: pre-provision session and require initialize
-          effectiveSessionId = randomUUID();
-          transport = new StreamableHTTPServerTransport({ sessionIdGenerator: () => effectiveSessionId! });
-          await mcpServer.connect(transport);
-          this.transports.set(effectiveSessionId, transport);
-          attachTransportHandlers(effectiveSessionId, transport);
-          this.connectionCount++;
-          if (this.sessionManager) {
-            this.sessionManager.getOrCreateSession(effectiveSessionId);
-          }
-          requireInitializeNotice = true;
-        }
-      }
 
       // Compatibility: if we just created a transport for a non-initialize call,
       // attempt a safe, internal initialize to avoid client retry loops.
@@ -676,10 +545,9 @@ export class MCPHttpServer {
             ...req.headers,
             'mcp-session-id': effectiveSessionId
           }
-        };
+        } as unknown as IncomingMessage;
         const versionsToTry = ['2025-06-18', '2024-11-05', '1.0'];
         let initOk = false;
-        let lastErr: any;
         for (const ver of versionsToTry) {
           try {
             const initReq = {
@@ -691,13 +559,12 @@ export class MCPHttpServer {
                 capabilities: {},
                 clientInfo: { name: 'obsidian-mcp-compat', version: getVersion() }
               }
-            } as any;
-            await transport.handleRequest(compatReq, createNullRes(), initReq);
+            } as unknown;
+            await transport.handleRequest(compatReq, createNullRes() as unknown as ServerResponse, initReq);
             initOk = true;
             Debug.log(`Compat initialize succeeded with protocolVersion=${ver}`);
             break;
           } catch (e) {
-            lastErr = e;
             Debug.error(`Compat initialize attempt failed (protocolVersion=${ver}):`, e);
           }
         }
@@ -714,7 +581,7 @@ export class MCPHttpServer {
       // instruct the client to initialize for this session.
       if (requireInitializeNotice && !isInitializeRequest(request)) {
         const id = request?.id ?? null;
-        res.setHeader('Mcp-Session-Id', effectiveSessionId as string);
+        res.setHeader('Mcp-Session-Id', effectiveSessionId);
         res.status(400).json({
           jsonrpc: '2.0',
           error: {
@@ -742,7 +609,11 @@ export class MCPHttpServer {
       }
 
       // Handle the request using the transport
-      await transport.handleRequest(req, res, request);
+      await transport.handleRequest(
+        req as unknown as IncomingMessage,
+        res as unknown as ServerResponse,
+        request as unknown
+      );
       
       Debug.log('📤 MCP Response sent via transport');
 
@@ -770,8 +641,8 @@ export class MCPHttpServer {
 
     return new Promise<void>((resolve, reject) => {
       // Create HTTP or HTTPS server based on configuration
-      const certificateConfig = this.plugin?.settings?.certificateConfig || { enabled: false };
-      
+      const certificateConfig: CertificateConfig = this.plugin?.settings?.certificateConfig ?? { enabled: false };
+
       // Initialize certificate manager lazily if HTTPS is enabled
       if (this.isHttps && !this.certificateManager) {
         try {
@@ -782,34 +653,34 @@ export class MCPHttpServer {
           this.isHttps = false;
         }
       }
-      
+
       // Create server - use certificate manager if available and HTTPS is enabled
       if (this.isHttps && this.certificateManager) {
         this.server = this.certificateManager.createServer(this.app, certificateConfig, this.port);
       } else {
         // Create standard HTTP server
-        const http = require('http');
-        this.server = http.createServer(this.app);
+        this.server = createHttpServer(this.app);
       }
-      
+
       const protocol = this.isHttps ? 'https' : 'http';
-      
+
       if (!this.server) {
         reject(new Error('Failed to create server'));
         return;
       }
-      
+
       // Configure server timeouts to keep connections healthy and prevent hangs
       try {
+        const serverWithTimeouts = this.server as unknown as ServerWithTimeouts;
         // Keep connections alive long enough for clients, but not indefinitely
-        (this.server as any).keepAliveTimeout = 60_000; // 60s
+        serverWithTimeouts.keepAliveTimeout = 60_000; // 60s
         // Headers timeout should exceed keepAliveTimeout slightly
-        (this.server as any).headersTimeout = 65_000; // 65s
+        serverWithTimeouts.headersTimeout = 65_000; // 65s
         // Per-request timeout; 0 to disable, or a generous value
-        (this.server as any).requestTimeout = 120_000; // 120s
+        serverWithTimeouts.requestTimeout = 120_000; // 120s
         // Legacy idle timeout fallback
-        if (typeof (this.server as any).setTimeout === 'function') {
-          (this.server as any).setTimeout(120_000);
+        if (typeof serverWithTimeouts.setTimeout === 'function') {
+          serverWithTimeouts.setTimeout(120_000);
         }
         Debug.log('⏱️ Server timeouts configured (keepAlive=60s, headers=65s, request=120s)');
       } catch (e) {
@@ -830,10 +701,10 @@ export class MCPHttpServer {
         resolve();
       });
 
-      this.server.on('error', (error: any) => {
+      this.server.on('error', (error: unknown) => {
         this.isRunning = false;
         Debug.error('❌ Failed to start MCP server:', error);
-        reject(error);
+        reject(error instanceof Error ? error : new Error(String(error)));
       });
     });
   }
@@ -845,7 +716,7 @@ export class MCPHttpServer {
 
     // Clean up all active transports
     for (const [sessionId, transport] of this.transports) {
-      transport.close();
+      void transport.close();
       Debug.log(`🔚 Closed MCP session on shutdown: ${sessionId}`);
     }
     this.transports.clear();
@@ -863,7 +734,7 @@ export class MCPHttpServer {
 
     // Shutdown MCP server pool if it exists
     if (this.mcpServerPool) {
-      await this.mcpServerPool.shutdown();
+      this.mcpServerPool.shutdown();
     }
 
     return new Promise<void>((resolve) => {
@@ -890,26 +761,12 @@ export class MCPHttpServer {
   /**
    * Get connection pool statistics
    */
-  getConnectionPoolStats(): {
-    enabled: boolean;
-    stats?: {
-      activeConnections: number;
-      queuedRequests: number;
-      maxConnections: number;
-      utilization: number;
-    };
-    serverPoolStats?: {
-      activeServers: number;
-      maxServers: number;
-      utilization: string;
-      totalRequests: number;
-    };
-  } {
+  getConnectionPoolStats(): ConnectionPoolStatsResponse {
     if (!this.connectionPool) {
       return { enabled: false };
     }
 
-    const result: any = {
+    const result: ConnectionPoolStatsResponse = {
       enabled: true,
       stats: this.connectionPool.getStats()
     };
@@ -944,7 +801,7 @@ export class MCPHttpServer {
   /**
    * Prepare context data for worker thread operations
    */
-  private async prepareWorkerContext(request: PooledRequest): Promise<any> {
+  private prepareWorkerContext(request: PooledRequest): unknown {
     // Only prepare context for worker-compatible operations
     const workerOps = [
       'tool.vault.search',
@@ -969,18 +826,14 @@ export class MCPHttpServer {
     // For graph operations, we need file contents and link graph
     if (request.method.includes('graph.search-traverse')) {
       try {
-        const startPath = request.params.startPath;
+        const params = request.params as Record<string, unknown> | undefined;
+        const startPath = typeof params?.startPath === 'string' ? params.startPath : undefined;
         if (!startPath) return undefined;
-        
-        // Pre-fetch relevant file contents and link graph
-        // This is a simplified version - in production, we'd optimize this
-        const fileContents: Record<string, string> = {};
-        const linkGraph: Record<string, string[]> = {};
-        
+
         // Get initial file and its links
         const file = this.obsidianApp.vault.getAbstractFileByPath(startPath);
         if (!file || !('extension' in file)) return undefined;
-        
+
         // This would need more sophisticated pre-fetching logic
         // For now, return undefined to use main thread
         return undefined;

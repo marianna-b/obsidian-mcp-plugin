@@ -2,17 +2,103 @@ import { Debug } from '../utils/debug';
 import { ObsidianAPI } from '../utils/obsidian-api';
 import { SemanticRouter } from '../semantic/router';
 import { SemanticRequest } from '../types/semantic';
-import { isImageFile } from '../utils/image-handler';
-import { isImageFile as isImageFileObject } from '../types/obsidian';
-import { App } from 'obsidian';
+import { ObsidianImageFile } from '../types/obsidian';
 import { DataviewTool, isDataviewToolAvailable } from './dataview-tool';
 import { formatResponse } from '../formatters';
+
+/** MCP content item for text responses */
+interface MCPTextContent {
+  type: 'text';
+  text: string;
+}
+
+/** MCP content item for image responses */
+interface MCPImageContent {
+  type: 'image';
+  data: string;
+  mimeType: string;
+}
+
+/** MCP tool handler result */
+interface MCPToolResult {
+  content: (MCPTextContent | MCPImageContent)[];
+  isError?: boolean;
+}
+
+/** JSON Schema property definition */
+interface JsonSchemaProperty {
+  type: string;
+  description: string;
+  enum?: string[];
+  default?: unknown;
+  items?: { type: string };
+}
+
+/** Tool arguments passed to handler */
+interface ToolArgs {
+  action: string;
+  raw?: boolean;
+  query?: string;
+  format?: string;
+  source?: string;
+  path?: string;
+  [key: string]: unknown;
+}
+
+/** Semantic tool definition */
+export interface SemanticTool {
+  name: string;
+  description: string;
+  inputSchema: {
+    type: string;
+    properties: Record<string, JsonSchemaProperty | { type: string; description: string }>;
+    required: string[];
+  };
+  handler: (api: ObsidianAPI, args: unknown) => Promise<MCPToolResult>;
+}
+
+/** Tool visibility map — keys are "operation" or "operation.action", values are enabled/disabled */
+export type ToolVisibility = Record<string, boolean>;
+
+/** Plugin interface for checking read-only mode */
+interface PluginWithSettings {
+  settings?: {
+    readOnlyMode?: boolean;
+  };
+}
+
+/** Context for Dataview operation results */
+interface DataviewContext {
+  operation: string;
+  action: string;
+  query?: string;
+  source?: unknown;
+  path?: string;
+}
+
+/** Dataview operation result (either success with result or error) */
+interface DataviewResult {
+  result?: unknown;
+  error?: { code: string; message: string };
+  context: DataviewContext;
+}
 
 /**
  * Unified semantic tools that consolidate all operations into 5 main verbs
  */
 
-const createSemanticTool = (operation: string) => ({
+const createSemanticTool = (operation: string, visibility?: ToolVisibility): SemanticTool | null => {
+  // Check operation-level toggle
+  if (visibility && visibility[operation] === false) return null;
+
+  // Filter actions based on visibility
+  let actions = getActionsForOperation(operation);
+  if (visibility) {
+    actions = actions.filter(action => visibility[`${operation}.${action}`] !== false);
+    if (actions.length === 0) return null;
+  }
+
+  return {
   name: operation,
   description: getOperationDescription(operation),
   inputSchema: {
@@ -21,7 +107,7 @@ const createSemanticTool = (operation: string) => ({
       action: {
         type: 'string',
         description: 'The specific action to perform',
-        enum: getActionsForOperation(operation)
+        enum: actions
       },
       raw: {
         type: 'boolean',
@@ -32,11 +118,28 @@ const createSemanticTool = (operation: string) => ({
     },
     required: ['action']
   },
-  handler: async (api: ObsidianAPI, args: any) => {
+  handler: async (api: ObsidianAPI, rawArgs: unknown): Promise<MCPToolResult> => {
+    const args = (rawArgs ?? {}) as ToolArgs;
     const app = api.getApp();
-    
+
+    // Defense in depth: block actions disabled by visibility even if tool is enumerated
+    if (visibility && visibility[`${operation}.${args.action}`] === false) {
+      return {
+        content: [{
+          type: 'text' as const,
+          text: JSON.stringify({
+            error: {
+              code: 'ACTION_DISABLED',
+              message: `Action '${args.action}' is disabled in tool visibility settings`
+            }
+          }, null, 2)
+        }]
+      };
+    }
+
     // Check for read-only mode before processing write operations
-    if ((api as any).plugin?.settings?.readOnlyMode && operation === 'vault') {
+    const plugin = (api as unknown as { plugin?: PluginWithSettings }).plugin;
+    if (plugin?.settings?.readOnlyMode && operation === 'vault') {
       const writeOperations = ['create', 'update', 'delete', 'move', 'rename', 'copy', 'split', 'combine', 'concatenate'];
       if (writeOperations.includes(args.action)) {
         return {
@@ -62,7 +165,7 @@ const createSemanticTool = (operation: string) => ({
     // Handle Dataview operations separately
     if (operation === 'dataview') {
       const dataviewTool = new DataviewTool(api);
-      let result;
+      let result: DataviewResult;
 
       switch (args.action) {
         case 'status':
@@ -78,7 +181,8 @@ const createSemanticTool = (operation: string) => ({
               context: { operation, action: args.action }
             };
           } else {
-            const queryResult = await dataviewTool.executeQuery(args.query, args.format);
+            const dvFormat = args.format === 'js' ? 'js' : 'dql';
+            const queryResult = await dataviewTool.executeQuery(args.query, dvFormat);
             result = {
               result: queryResult,
               context: { operation, action: args.action, query: args.query }
@@ -185,36 +289,43 @@ const createSemanticTool = (operation: string) => ({
     }
     
     // Check if the result is an image file for vault read operations
-    if (operation === 'vault' && args.action === 'read' && response.result && isImageFileObject(response.result)) {
-      // Return image content for MCP
-      return {
-        content: [{
-          type: 'image' as const,
-          data: response.result.base64Data,
-          mimeType: response.result.mimeType
-        }]
-      };
+    if (operation === 'vault' && args.action === 'read' && response.result) {
+      const resultObj = response.result as Record<string, unknown>;
+      if ('mimeType' in resultObj && 'base64Data' in resultObj) {
+        // Return image content for MCP
+        const imageResult = resultObj as unknown as ObsidianImageFile;
+        return {
+          content: [{
+            type: 'image' as const,
+            data: imageResult.base64Data,
+            mimeType: imageResult.mimeType
+          }]
+        };
+      }
     }
-    
+
     // Only filter image files if they contain binary data that would cause JSON errors
     // For search results, we want to show image files in the results list
-    const filteredResult = response.result;
-    
+    const filteredResult: unknown = response.result;
+
     // Special handling for image files in view operations
-    if (operation === 'view' && args.action === 'file' && filteredResult && filteredResult.base64Data) {
-      return {
-        content: [{
-          type: 'image' as const,
-          data: filteredResult.base64Data,
-          mimeType: filteredResult.mimeType
-        }]
-      };
+    if (operation === 'view' && args.action === 'file' && filteredResult && typeof filteredResult === 'object') {
+      const viewResult = filteredResult as Record<string, unknown>;
+      if (viewResult.base64Data) {
+        return {
+          content: [{
+            type: 'image' as const,
+            data: viewResult.base64Data as string,
+            mimeType: viewResult.mimeType as string
+          }]
+        };
+      }
     }
     
     try {
       // Format response through presentation facade
       const rawMode = args.raw === true;
-      const formattedOutput = rawMode
+      const formattedOutput: string = rawMode
         ? JSON.stringify({
             result: filteredResult,
             workflow: response.workflow,
@@ -229,7 +340,7 @@ const createSemanticTool = (operation: string) => ({
           text: formattedOutput
         }]
       };
-    } catch (error) {
+    } catch (error: unknown) {
       // Handle JSON serialization errors
       Debug.error('JSON serialization failed:', error);
       return {
@@ -240,45 +351,10 @@ const createSemanticTool = (operation: string) => ({
       };
     }
   }
-});
+  };
+};
 
-function filterImageFilesFromSearchResults(searchResult: any): any {
-  if (!searchResult) return searchResult;
-  
-  // Handle paginated search results format
-  if (searchResult.results && Array.isArray(searchResult.results)) {
-    return {
-      ...searchResult,
-      results: searchResult.results.filter((result: any) => {
-        // Filter out results that reference image files
-        if (result.filename && typeof result.filename === 'string' && isImageFile(result.filename)) {
-          return false;
-        }
-        if (result.path && typeof result.path === 'string' && isImageFile(result.path)) {
-          return false;
-        }
-        return true;
-      })
-    };
-  }
-  
-  // Handle simple search results format (array of results)
-  if (Array.isArray(searchResult)) {
-    return searchResult.filter((result: any) => {
-      if (result.filename && typeof result.filename === 'string' && isImageFile(result.filename)) {
-        return false;
-      }
-      if (result.path && typeof result.path === 'string' && isImageFile(result.path)) {
-        return false;
-      }
-      return true;
-    });
-  }
-  
-  return searchResult;
-}
-
-function getOperationDescription(operation: string): string {
+export function getOperationDescription(operation: string): string {
   const descriptions: Record<string, string> = {
     vault: '📁 File operations - list, read, create, update, delete, search, fragments, move, rename, copy, split, combine, concatenate. Search supports: operators (file:, path:, content:, tag:), OR/AND, "quoted phrases", /regex/. Options: ranked=true for TF-IDF relevance scoring, searchStrategy (filename|content|combined|auto), includeSnippets for contextual extracts.',
     edit: '✏️ Edit files - window: find/replace with fuzzy matching, append: add to end, patch: modify headings/blocks/frontmatter, at_line: insert at line number, from_buffer: reuse previous window content',
@@ -292,7 +368,7 @@ function getOperationDescription(operation: string): string {
   return descriptions[operation] || 'Unknown operation';
 }
 
-function getActionsForOperation(operation: string): string[] {
+export function getActionsForOperation(operation: string): string[] {
   const actions: Record<string, string[]> = {
     vault: ['list', 'read', 'create', 'update', 'delete', 'search', 'fragments', 'move', 'rename', 'copy', 'split', 'combine', 'concatenate'],
     edit: ['window', 'append', 'patch', 'at_line', 'from_buffer'],
@@ -306,7 +382,7 @@ function getActionsForOperation(operation: string): string[] {
   return actions[operation] || [];
 }
 
-function getParametersForOperation(operation: string): Record<string, any> {
+function getParametersForOperation(operation: string): Record<string, unknown> {
   // Common parameters across operations
   const pathParam = {
     path: {
@@ -323,7 +399,7 @@ function getParametersForOperation(operation: string): Record<string, any> {
   };
   
   // Operation-specific parameters
-  const operationParams: Record<string, Record<string, any>> = {
+  const operationParams: Record<string, Record<string, unknown>> = {
     vault: {
       ...pathParam,
       directory: {
@@ -695,33 +771,29 @@ function getParametersForOperation(operation: string): Record<string, any> {
 /**
  * Create semantic tools array with optional Dataview and Smart Connections support
  */
-export async function createSemanticTools(api?: ObsidianAPI, settings?: any): Promise<any[]> {
-  const baseTools = [
-    createSemanticTool('vault'),
-    createSemanticTool('edit'),
-    createSemanticTool('view'),
-    createSemanticTool('workflow'),
-    createSemanticTool('system'),
-    createSemanticTool('graph'),
-    createSemanticTool('bases')
-  ];
+export async function createSemanticTools(api?: ObsidianAPI, settings?: any, visibility?: ToolVisibility): Promise<SemanticTool[]> {
+  const operations = ['vault', 'edit', 'view', 'workflow', 'system', 'graph', 'bases'];
 
-  // Add Dataview tool if available
+  // Add Dataview if available
   if (api && isDataviewToolAvailable(api)) {
-    baseTools.push(createSemanticTool('dataview'));
+    operations.push('dataview');
   }
-  
+
+  // Create base tools with visibility filtering
+  const tools: SemanticTool[] = operations
+    .map(op => createSemanticTool(op, visibility))
+    .filter((tool): tool is SemanticTool => tool !== null);
+
   // Add Smart Connections tools if enabled and available
-  if (api && settings) {
+  if (api && settings?.enableSmartConnections) {
     try {
       const { createSmartConnectionsTools } = await import('./smart-connections-tools.js');
       const { tools: scTools, handlers: scHandlers } = await createSmartConnectionsTools(api, settings);
-      
-      // Add tools with handlers attached
+
       for (const tool of scTools) {
         const handler = scHandlers.get(tool.name);
         if (handler && tool.description) {
-          baseTools.push({
+          tools.push({
             name: tool.name,
             description: tool.description,
             inputSchema: tool.inputSchema as any,
@@ -735,10 +807,13 @@ export async function createSemanticTools(api?: ObsidianAPI, settings?: any): Pr
     }
   }
 
-  return baseTools;
+  return tools;
 }
 
-// Export the base 6 semantic tools (for backward compatibility)
+/** All operation group names (for UI enumeration) */
+export const ALL_OPERATIONS = ['vault', 'edit', 'view', 'workflow', 'system', 'graph', 'bases', 'dataview'] as const;
+
+// Export the base semantic tools (for backward compatibility, no visibility filtering)
 export const semanticTools = [
   createSemanticTool('vault'),
   createSemanticTool('edit'),
@@ -747,4 +822,4 @@ export const semanticTools = [
   createSemanticTool('system'),
   createSemanticTool('graph'),
   createSemanticTool('bases')
-];
+].filter((tool): tool is SemanticTool => tool !== null);

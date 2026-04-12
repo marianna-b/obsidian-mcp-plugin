@@ -1,10 +1,10 @@
-import { App, TFile, CachedMetadata } from 'obsidian';
+import { App, TFile, CachedMetadata, getAllTags } from 'obsidian';
 
 /**
  * Represents a node in the Obsidian vault graph
  */
 export interface GraphNode {
-  file: TFile;
+  file: TFile | null;
   path: string;
   title: string;
   metadata?: CachedMetadata;
@@ -126,23 +126,22 @@ export class GraphTraversal {
   getTagConnections(filePath: string): GraphEdge[] {
     const edges: GraphEdge[] = [];
     const file = this.app.vault.getAbstractFileByPath(filePath);
-    
+
     if (!(file instanceof TFile)) return edges;
 
     const cache = this.app.metadataCache.getFileCache(file);
-    if (!cache?.tags) return edges;
+    const fileTags = new Set(cache ? getAllTags(cache) || [] : []);
+    if (fileTags.size === 0) return edges;
 
-    const fileTags = new Set(cache.tags.map(t => t.tag));
-    
     // Find other files with matching tags
     const files = this.app.vault.getFiles();
     for (const otherFile of files) {
       if (otherFile.path === filePath) continue;
-      
-      const otherCache = this.app.metadataCache.getFileCache(otherFile);
-      if (!otherCache?.tags) continue;
 
-      const sharedTags = otherCache.tags.filter(t => fileTags.has(t.tag));
+      const otherCache = this.app.metadataCache.getFileCache(otherFile);
+      const otherTags = otherCache ? getAllTags(otherCache) || [] : [];
+
+      const sharedTags = otherTags.filter(t => fileTags.has(t));
       if (sharedTags.length > 0) {
         edges.push({
           source: filePath,
@@ -159,15 +158,14 @@ export class GraphTraversal {
   /**
    * Perform breadth-first traversal from a starting node
    */
-  async breadthFirstTraversal(
+  breadthFirstTraversal(
     startPath: string,
     options: GraphTraversalOptions = {}
-  ): Promise<GraphTraversalResult> {
+  ): GraphTraversalResult {
     const startTime = Date.now();
     const {
       maxDepth = 3,
       maxNodes = 100,
-      includeUnresolved = false,
       followBacklinks = true,
       followForwardLinks = true,
       followTags = false,
@@ -287,11 +285,11 @@ export class GraphTraversal {
   /**
    * Find shortest path between two nodes using BFS
    */
-  async findShortestPath(
+  findShortestPath(
     sourcePath: string,
     targetPath: string,
     options: Omit<GraphTraversalOptions, 'maxNodes'> = {}
-  ): Promise<string[] | null> {
+  ): string[] | null {
     const queue: Array<{ path: string; pathSoFar: string[] }> = [
       { path: sourcePath, pathSoFar: [sourcePath] }
     ];
@@ -331,11 +329,11 @@ export class GraphTraversal {
   /**
    * Find all paths between two nodes up to a certain depth
    */
-  async findAllPaths(
+  findAllPaths(
     sourcePath: string,
     targetPath: string,
     maxDepth: number = 5
-  ): Promise<string[][]> {
+  ): string[][] {
     const paths: string[][] = [];
     const visited = new Set<string>();
 
@@ -386,7 +384,7 @@ export class GraphTraversal {
 
       // Create a virtual root node
       const rootNode: GraphNode = {
-        file: null as any, // Virtual node, no actual file
+        file: null, // Virtual node, no actual file
         path: '/',
         title: 'Vault Root',
         metadata: undefined
@@ -461,7 +459,7 @@ export class GraphTraversal {
     let tagCount = 0;
     if (file instanceof TFile) {
       const cache = this.app.metadataCache.getFileCache(file);
-      tagCount = cache?.tags?.length || 0;
+      tagCount = (cache ? getAllTags(cache) || [] : []).length;
     }
 
     return {

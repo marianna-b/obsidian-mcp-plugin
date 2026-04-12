@@ -27,7 +27,7 @@ export class MCPIgnoreManager {
   setEnabled(enabled: boolean) {
     this.isEnabled = enabled;
     if (enabled) {
-      this.loadIgnoreFile();
+      void this.loadIgnoreFile();
     }
   }
 
@@ -58,7 +58,7 @@ export class MCPIgnoreManager {
       this.lastModified = stat?.mtime || Date.now();
       
       Debug.log(`MCPIgnore: Loaded ${this.patterns.length} exclusion patterns`);
-    } catch (error) {
+    } catch {
       // File doesn't exist or can't be read - no exclusions
       this.patterns = [];
       this.matchers = [];
@@ -105,7 +105,8 @@ export class MCPIgnoreManager {
         validPatterns.push(trimmed);
         matchers.push(matcher);
       } catch (error) {
-        Debug.log(`MCPIgnore: Invalid pattern "${trimmed}": ${error}`);
+        const message = error instanceof Error ? error.message : String(error);
+        Debug.log(`MCPIgnore: Invalid pattern "${trimmed}": ${message}`);
       }
     }
 
@@ -274,7 +275,8 @@ export class MCPIgnoreManager {
       await this.app.vault.adapter.write(this.ignorePath, template);
       Debug.log(`MCPIgnore: Created default .mcpignore file at ${this.ignorePath}`);
     } catch (error) {
-      Debug.log(`MCPIgnore: Failed to create .mcpignore file: ${error}`);
+      const message = error instanceof Error ? error.message : String(error);
+      Debug.log(`MCPIgnore: Failed to create .mcpignore file: ${message}`);
       throw error;
     }
   }
@@ -287,7 +289,7 @@ export class MCPIgnoreManager {
       // Force fresh check - no caching
       const stat = await this.app.vault.adapter.stat(this.ignorePath);
       return stat !== null && stat !== undefined;
-    } catch (error) {
+    } catch {
       // File doesn't exist
       Debug.log(`MCPIgnore: File check for ${this.ignorePath} - does not exist`);
       return false;

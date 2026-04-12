@@ -1,14 +1,20 @@
 import { Debug } from './utils/debug';
 import { App } from 'obsidian';
+import type { IncomingMessage, ServerResponse, Server } from 'http';
+
+interface MCPToolCallParams {
+  name?: string;
+  arguments?: Record<string, unknown>;
+}
 
 interface MCPRequest {
   method: string;
-  params?: any;
+  params?: MCPToolCallParams;
   id?: string | number;
 }
 
 interface MCPResponse {
-  result?: any;
+  result?: unknown;
   error?: {
     code: number;
     message: string;
@@ -19,7 +25,7 @@ interface MCPResponse {
 export class NodeMCPServer {
   private app: App;
   private port: number;
-  private server: any;
+  private server: Server | undefined;
   private isRunning: boolean = false;
 
   constructor(app: App, port: number = 3001) {
@@ -35,14 +41,15 @@ export class NodeMCPServer {
 
     try {
       // Try to use Node.js HTTP server if available in Obsidian
-      const http = require('http');
-      
-      this.server = http.createServer((req: any, res: any) => {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports -- Dynamic require needed for Node.js http module in Obsidian desktop environment
+      const http = require('http') as typeof import('http');
+
+      this.server = http.createServer((req: IncomingMessage, res: ServerResponse) => {
         this.handleRequest(req, res);
       });
 
       await new Promise<void>((resolve, reject) => {
-        this.server.listen(this.port, () => {
+        this.server!.listen(this.port, () => {
           this.isRunning = true;
           Debug.log(`🚀 MCP server started on port ${this.port}`);
           Debug.log(`📍 Health check: /`);
@@ -50,9 +57,9 @@ export class NodeMCPServer {
           resolve();
         });
 
-        this.server.on('error', (error: any) => {
+        this.server!.on('error', (error: unknown) => {
           Debug.error('❌ Failed to start MCP server:', error);
-          reject(error);
+          reject(error instanceof Error ? error : new Error(String(error)));
         });
       });
 
@@ -68,7 +75,7 @@ export class NodeMCPServer {
     }
 
     return new Promise<void>((resolve) => {
-      this.server.close(() => {
+      this.server!.close(() => {
         this.isRunning = false;
         this.server = undefined;
         Debug.log('👋 MCP server stopped');
@@ -77,7 +84,7 @@ export class NodeMCPServer {
     });
   }
 
-  private async handleRequest(req: any, res: any): Promise<void> {
+  private handleRequest(req: IncomingMessage, res: ServerResponse): void {
     // Set CORS headers
     res.setHeader('Access-Control-Allow-Origin', '*');
     res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PUT, DELETE, OPTIONS');
@@ -92,9 +99,9 @@ export class NodeMCPServer {
 
     try {
       if (req.method === 'GET' && req.url === '/') {
-        await this.handleHealthCheck(req, res);
+        this.handleHealthCheck(req, res);
       } else if (req.method === 'POST' && req.url === '/mcp') {
-        await this.handleMCPRequest(req, res);
+        this.handleMCPRequest(req, res);
       } else {
         res.writeHead(404, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({ error: 'Not found' }));
@@ -109,7 +116,7 @@ export class NodeMCPServer {
     }
   }
 
-  private async handleHealthCheck(req: any, res: any): Promise<void> {
+  private handleHealthCheck(_req: IncomingMessage, res: ServerResponse): void {
     const response = {
       name: 'Semantic Notes Vault MCP',
       version: '0.1.4',
@@ -122,16 +129,16 @@ export class NodeMCPServer {
     res.end(JSON.stringify(response));
   }
 
-  private async handleMCPRequest(req: any, res: any): Promise<void> {
+  private handleMCPRequest(req: IncomingMessage, res: ServerResponse): void {
     let body = '';
-    
-    req.on('data', (chunk: any) => {
+
+    req.on('data', (chunk: Buffer) => {
       body += chunk.toString();
     });
 
-    req.on('end', async () => {
+    req.on('end', () => {
       try {
-        const request: MCPRequest = JSON.parse(body);
+        const request = JSON.parse(body) as MCPRequest;
         let response: MCPResponse;
 
         Debug.log('📨 MCP Request:', request.method, request.params);
@@ -140,11 +147,11 @@ export class NodeMCPServer {
           case 'tools/list':
             response = this.handleToolsList(request);
             break;
-          
+
           case 'tools/call':
-            response = await this.handleToolCall(request);
+            response = this.handleToolCall(request);
             break;
-          
+
           default:
             response = {
               error: {
@@ -159,7 +166,7 @@ export class NodeMCPServer {
         res.writeHead(200, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify(response));
 
-      } catch (error) {
+      } catch (error: unknown) {
         Debug.error('MCP request parsing error:', error);
         res.writeHead(400, { 'Content-Type': 'application/json' });
         res.end(JSON.stringify({
@@ -196,11 +203,13 @@ export class NodeMCPServer {
     };
   }
 
-  private async handleToolCall(request: MCPRequest): Promise<MCPResponse> {
-    const { name, arguments: args } = request.params || {};
+  private handleToolCall(request: MCPRequest): MCPResponse {
+    const name = request.params?.name;
+    const args = request.params?.arguments;
 
     if (name === 'echo') {
-      const message = args?.message as string;
+      const rawMessage = args?.message;
+      const message = typeof rawMessage === 'string' ? rawMessage : '';
       const vaultName = this.app.vault.getName();
       const activeFile = this.app.workspace.getActiveFile();
       const fileCount = this.app.vault.getAllLoadedFiles().length;

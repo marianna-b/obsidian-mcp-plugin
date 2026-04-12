@@ -1,4 +1,4 @@
-import { App, TFile, TFolder, getAllTags } from 'obsidian';
+import { App, TFile, getAllTags, CachedMetadata, LinkCache } from 'obsidian';
 import * as yaml from 'js-yaml';
 import {
   BaseYAML,
@@ -67,7 +67,8 @@ export class BasesAPI {
     try {
       return yaml.load(content) as BaseYAML;
     } catch (error) {
-      throw new Error(`Invalid YAML in base file: ${error}`);
+      const message = error instanceof Error ? error.message : String(error);
+      throw new Error(`Invalid YAML in base file: ${message}`);
     }
   }
 
@@ -128,7 +129,7 @@ export class BasesAPI {
       }
 
       // Create evaluated note
-      const evaluatedNote = await this.createEvaluatedNote(file, context, baseConfig);
+      const evaluatedNote = this.createEvaluatedNote(file, context, baseConfig);
       notes.push(evaluatedNote);
     }
 
@@ -162,8 +163,11 @@ export class BasesAPI {
         return this.exportToJSON(result);
       case 'markdown':
         return this.exportToMarkdown(result);
-      default:
-        throw new Error(`Unsupported export format: ${format}`);
+      default: {
+        // Exhaustive check - this should never happen
+        const exhaustiveCheck: never = format;
+        throw new Error(`Unsupported export format: ${String(exhaustiveCheck)}`);
+      }
     }
   }
 
@@ -172,7 +176,7 @@ export class BasesAPI {
   /**
    * Parse frontmatter from file content
    */
-  private parseFrontmatter(content: string): Record<string, any> {
+  private parseFrontmatter(content: string): Record<string, unknown> {
     const frontmatterRegex = /^---\s*\n([\s\S]*?)\n---/;
     const match = content.match(frontmatterRegex);
     
@@ -187,7 +191,7 @@ export class BasesAPI {
       
       // Ensure we return an object
       if (typeof parsed === 'object' && parsed !== null) {
-        return parsed as Record<string, any>;
+        return parsed as Record<string, unknown>;
       }
       
       return {};
@@ -218,8 +222,8 @@ export class BasesAPI {
     // Only parse manually if cache is unavailable (rare edge case)
     // This might happen if the file was just created or cache is stale
     if (!cache || Object.keys(frontmatter).length === 0) {
-      // Force a cache refresh first
-      await this.app.metadataCache.trigger('resolve', file);
+      // Force a cache refresh first (trigger is synchronous)
+      this.app.metadataCache.trigger('resolve', file);
       
       // Try cache again after refresh
       const refreshedCache = this.app.metadataCache.getFileCache(file);
@@ -235,7 +239,7 @@ export class BasesAPI {
     const context: NoteContext = {
       file,
       frontmatter,
-      cache
+      cache: cache ?? undefined
     };
 
     // Evaluate formulas if defined
@@ -257,7 +261,7 @@ export class BasesAPI {
   private async evaluateFilter(filter: FilterExpression, context: NoteContext): Promise<boolean> {
     if (typeof filter === 'string') {
       // Evaluate expression string
-      return await this.expressionEvaluator.evaluate(filter, context);
+      return Boolean(await this.expressionEvaluator.evaluate(filter, context));
     }
 
     // Handle logical operators
@@ -291,11 +295,11 @@ export class BasesAPI {
     return true;
   }
 
-  private async createEvaluatedNote(file: TFile, context: NoteContext, baseConfig: BaseYAML): Promise<EvaluatedNote> {
+  private createEvaluatedNote(file: TFile, context: NoteContext, baseConfig: BaseYAML): EvaluatedNote {
     const fileProps = this.getFileProperties(file, context.cache);
     
     // Combine all properties
-    const properties: Record<string, any> = {
+    const properties: Record<string, unknown> = {
       ...context.frontmatter
     };
 
@@ -321,9 +325,9 @@ export class BasesAPI {
     };
   }
 
-  private getFileProperties(file: TFile, cache: any): FileProperties {
+  private getFileProperties(file: TFile, cache: CachedMetadata | null | undefined): FileProperties {
     const tags = cache ? (getAllTags(cache) || []) : [];
-    const links = cache?.links?.map((l: any) => l.link) || [];
+    const links: string[] = cache?.links?.map((l: LinkCache) => l.link) || [];
 
     return {
       name: file.basename,
@@ -357,11 +361,11 @@ export class BasesAPI {
     });
   }
 
-  private getPropertyValue(note: EvaluatedNote, path: string): any {
+  private getPropertyValue(note: EvaluatedNote, path: string): unknown {
     // Handle different property paths
     if (path.startsWith('file.')) {
       const prop = path.substring(5);
-      return (note.file as any)[prop];
+      return note.file[prop as keyof FileProperties];
     } else if (path.startsWith('formula.')) {
       const prop = path.substring(8);
       return note.formulas?.[prop];
@@ -424,7 +428,7 @@ export class BasesAPI {
       for (const note of result.notes) {
         const values = columns.map(col => {
           const value = this.getPropertyValue(note, col);
-          return String(value ?? '');
+          return this.formatValue(value);
         });
         lines.push('| ' + values.join(' | ') + ' |');
       }
@@ -433,9 +437,15 @@ export class BasesAPI {
     return lines.join('\n');
   }
 
-  private escapeCSV(value: any): string {
+  private formatValue(value: unknown): string {
     if (value == null) return '';
-    const str = String(value);
+    if (typeof value === 'object') return JSON.stringify(value);
+    // At this point value is a primitive (string, number, boolean, bigint, symbol)
+    return String(value as string | number | boolean | bigint | symbol);
+  }
+
+  private escapeCSV(value: unknown): string {
+    const str = this.formatValue(value);
     if (str.includes(',') || str.includes('"') || str.includes('\n')) {
       return `"${str.replace(/"/g, '""')}"`;
     }

@@ -198,18 +198,18 @@ async function resizeImageWithCanvas(
           }, mimeType, mimeType === 'image/jpeg' ? (config.quality || 0.8) : undefined);
           
         } catch (error) {
-          reject(error);
+          reject(error instanceof Error ? error : new Error(String(error)));
         }
       };
-      
+
       img.onerror = () => reject(new Error('Failed to load image'));
-      
-      // Create blob URL from buffer
-      const blob = new Blob([buffer]);
+
+      // Create blob URL from buffer (convert to Uint8Array for TypeScript compatibility)
+      const blob = new Blob([new Uint8Array(buffer)]);
       img.src = URL.createObjectURL(blob);
-      
+
     } catch (error) {
-      reject(error);
+      reject(error instanceof Error ? error : new Error(String(error)));
     }
   });
 }

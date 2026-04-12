@@ -1,22 +1,19 @@
 import { EventEmitter } from 'events';
-import { Worker } from 'worker_threads';
-import { randomUUID } from 'crypto';
 import { Debug } from './debug';
 import { WorkerManager } from './worker-manager';
-import * as path from 'path';
 
 export interface PooledRequest {
   id: string;
   sessionId?: string;
   method: string;
-  params: any;
+  params: unknown;
   timestamp: number;
 }
 
 export interface PooledResponse {
   id: string;
-  result?: any;
-  error?: any;
+  result?: unknown;
+  error?: unknown;
 }
 
 export interface ConnectionPoolOptions {
@@ -54,7 +51,7 @@ export class ConnectionPool extends EventEmitter {
   /**
    * Initialize the connection pool
    */
-  async initialize(): Promise<void> {
+  initialize(): void {
     Debug.log(`🏊 Initializing connection pool with ${this.options.maxConnections} max connections`);
     
     // Initialize worker manager
@@ -100,7 +97,15 @@ export class ConnectionPool extends EventEmitter {
       this.once(`response:${request.id}`, (response: PooledResponse) => {
         clearTimeout(timeout);
         if (response.error) {
-          reject(response.error);
+          if (response.error instanceof Error) {
+            reject(response.error);
+          } else if (typeof response.error === 'string') {
+            reject(new Error(response.error));
+          } else if (response.error && typeof response.error === 'object' && 'message' in response.error) {
+            reject(new Error(String((response.error as { message: unknown }).message)));
+          } else {
+            reject(new Error(JSON.stringify(response.error)));
+          }
         } else {
           resolve(response);
         }
@@ -124,7 +129,7 @@ export class ConnectionPool extends EventEmitter {
 
       // Check if this operation should use a worker
       if (this.shouldUseWorker(request)) {
-        this.processWithWorker(request);
+        void this.processWithWorker(request);
       } else {
         // Process on main thread
         this.emit('process', request);

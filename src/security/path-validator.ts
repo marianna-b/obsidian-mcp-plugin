@@ -38,8 +38,8 @@ export class SecurePathValidator {
 
 	constructor(app: App) {
 		// Get vault base path using Obsidian's adapter
-		// @ts-ignore - basePath exists at runtime but not in TypeScript definitions
-		this.baseDir = app.vault.adapter.basePath || '';
+		// basePath exists at runtime on FileSystemAdapter but not in public TypeScript definitions
+		this.baseDir = (app.vault.adapter as unknown as { basePath: string }).basePath || '';
 		
 		if (!this.baseDir) {
 			throw new Error('Could not determine vault base directory');
@@ -96,7 +96,7 @@ export class SecurePathValidator {
 				if (!this.isWithinVault(realPath)) {
 					throw new SecurityError('Resolved path escapes vault boundary', 'SYMLINK_ESCAPE');
 				}
-			} catch (e) {
+			} catch {
 				// File system error, let it pass for now
 			}
 		}

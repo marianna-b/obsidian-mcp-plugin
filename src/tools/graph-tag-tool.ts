@@ -1,7 +1,8 @@
-import { App } from 'obsidian';
+import { App, TFile, getAllTags } from 'obsidian';
 import { ObsidianAPI } from '../utils/obsidian-api';
 import { SearchCore } from '../utils/search-core';
 import { GraphSearchTagTraversal } from './graph-search-tag-traversal';
+import { TraversalNode, GraphSearchResult } from './graph-search-traversal';
 
 interface GraphTagToolParams {
     action: 'tag-traverse' | 'tag-analysis' | 'shared-tags';
@@ -15,6 +16,20 @@ interface GraphTagToolParams {
     tagWeight?: number;
 }
 
+/** Extended traversal node with connection type info */
+interface TagTraversalNode extends TraversalNode {
+    connectionType?: 'link' | 'tag';
+}
+
+/** Result type from searchTraverseWithTags */
+type TagSearchResult = GraphSearchResult & { tagConnections: number; followTags?: boolean };
+
+/** Tag connection strength entry */
+interface TagConnectionEntry {
+    tag: string;
+    connectionCount: number;
+}
+
 export class GraphTagTool {
     private graphSearch: GraphSearchTagTraversal;
 
@@ -26,7 +41,7 @@ export class GraphTagTool {
         this.graphSearch = new GraphSearchTagTraversal(app, api, searchCore);
     }
 
-    async execute(params: GraphTagToolParams): Promise<any> {
+    async execute(params: GraphTagToolParams): Promise<unknown> {
         switch (params.action) {
             case 'tag-traverse':
                 return this.tagTraverse(params);
@@ -34,8 +49,10 @@ export class GraphTagTool {
                 return this.analyzeTagConnections(params);
             case 'shared-tags':
                 return this.getSharedTags(params);
-            default:
-                throw new Error(`Unknown graph tag action: ${params.action}`);
+            default: {
+                const exhaustiveCheck: never = params.action;
+                throw new Error(`Unknown graph tag action: ${String(exhaustiveCheck)}`);
+            }
         }
     }
 
@@ -67,35 +84,38 @@ export class GraphTagTool {
                 tagConnectionsFollowed: result.tagConnections,
                 executionTime: `${result.executionTime.toFixed(2)}ms`
             },
-            snippetChain: result.traversalChain.map((node: any) => ({
-                file: node.path,
-                depth: node.depth,
-                parent: node.parentPath,
-                connectionType: node.connectionType || 'link',
-                snippet: {
-                    text: node.snippet.text,
-                    score: node.snippet.score.toFixed(3),
-                    lineNumber: node.snippet.lineNumber,
-                    preview: this.truncateText(node.snippet.context, 200)
-                }
-            })),
+            snippetChain: result.traversalChain.map((node: TraversalNode) => {
+                const tagNode = node as TagTraversalNode;
+                return {
+                    file: tagNode.path,
+                    depth: tagNode.depth,
+                    parent: tagNode.parentPath,
+                    connectionType: tagNode.connectionType || 'link',
+                    snippet: {
+                        text: tagNode.snippet.text,
+                        score: tagNode.snippet.score.toFixed(3),
+                        lineNumber: tagNode.snippet.lineNumber,
+                        preview: this.truncateText(tagNode.snippet.context, 200)
+                    }
+                };
+            }),
             workflowSuggestions: this.generateWorkflowSuggestions(result)
         };
     }
 
-    private async analyzeTagConnections(params: GraphTagToolParams) {
+    private analyzeTagConnections(params: GraphTagToolParams) {
         if (!params.startPath) {
             throw new Error('startPath is required for tag-analysis action');
         }
 
         // Get the file and its tags
         const file = this.app.vault.getAbstractFileByPath(params.startPath);
-        if (!file || !('extension' in file)) {
+        if (!(file instanceof TFile)) {
             throw new Error('File not found or not a valid file');
         }
 
-        const cache = this.app.metadataCache.getFileCache(file as any);
-        const tags = cache?.tags?.map(t => t.tag) || [];
+        const cache = this.app.metadataCache.getFileCache(file);
+        const tags = cache ? getAllTags(cache) || [] : [];
 
         // Find all files with matching tags
         const tagConnections: Record<string, string[]> = {};
@@ -103,16 +123,16 @@ export class GraphTagTool {
             tagConnections[tag] = [];
         }
 
+        const tagSet = new Set(tags);
         const allFiles = this.app.vault.getMarkdownFiles();
         for (const otherFile of allFiles) {
             if (otherFile.path === params.startPath) continue;
-            
+
             const otherCache = this.app.metadataCache.getFileCache(otherFile);
-            if (otherCache?.tags) {
-                for (const tag of tags) {
-                    if (otherCache.tags.some(t => t.tag === tag)) {
-                        tagConnections[tag].push(otherFile.path);
-                    }
+            const otherTags = otherCache ? getAllTags(otherCache) || [] : [];
+            for (const tag of otherTags) {
+                if (tagSet.has(tag)) {
+                    tagConnections[tag].push(otherFile.path);
                 }
             }
         }
@@ -126,12 +146,12 @@ export class GraphTagTool {
         };
     }
 
-    private async getSharedTags(params: GraphTagToolParams) {
+    private getSharedTags(params: GraphTagToolParams) {
         if (!params.startPath || !params.targetPath) {
             throw new Error('startPath and targetPath are required for shared-tags action');
         }
 
-        const sharedTags = await this.graphSearch.getSharedTags(params.startPath, params.targetPath);
+        const sharedTags = this.graphSearch.getSharedTags(params.startPath, params.targetPath);
         
         return {
             source: params.startPath,
@@ -144,28 +164,29 @@ export class GraphTagTool {
         };
     }
 
-    private generateSummary(result: any): string {
+    private generateSummary(result: TagSearchResult): string {
         const matchCount = result.traversalChain.length;
         const visitedCount = result.totalNodesVisited;
         const tagConnections = result.tagConnections || 0;
-        
+
         if (matchCount === 0) {
             return `No matches found for "${result.searchQuery}" after visiting ${visitedCount} notes.`;
         }
-        
+
         const topScore = result.traversalChain[0]?.snippet.score || 0;
         return `Found ${matchCount} matching notes out of ${visitedCount} visited (${tagConnections} via tags). ` +
                `Best match: "${result.traversalChain[0].path}" (score: ${topScore.toFixed(3)})`;
     }
 
-    private formatTraversalPath(chain: any[]): string {
+    private formatTraversalPath(chain: TraversalNode[]): string {
         if (chain.length === 0) return 'No path found';
-        
+
         return chain
-            .map((node, index) => {
-                const indent = '  '.repeat(node.depth);
-                const arrow = index === 0 ? '🎯' : node.connectionType === 'tag' ? '🏷️' : '→';
-                return `${indent}${arrow} ${node.path}`;
+            .map((node: TraversalNode, index: number) => {
+                const tagNode = node as TagTraversalNode;
+                const indent = '  '.repeat(tagNode.depth);
+                const arrow = index === 0 ? '🎯' : tagNode.connectionType === 'tag' ? '🏷️' : '→';
+                return `${indent}${arrow} ${tagNode.path}`;
             })
             .join('\n');
     }
@@ -175,32 +196,32 @@ export class GraphTagTool {
         return text.substring(0, maxLength - 3) + '...';
     }
 
-    private generateWorkflowSuggestions(result: any): string[] {
+    private generateWorkflowSuggestions(result: TagSearchResult): string[] {
         const suggestions: string[] = [];
         const tagConnections = result.tagConnections || 0;
-        
+
         if (result.traversalChain.length === 0) {
             suggestions.push('Try broadening your search query');
             suggestions.push('Lower the score threshold to include more results');
             suggestions.push('Enable tag following to discover more connections');
         } else {
             suggestions.push(`Found ${result.traversalChain.length} connected notes (${tagConnections} via tag bridges)`);
-            
+
             if (tagConnections === 0 && result.followTags !== false) {
                 suggestions.push('No tag connections found - notes may have different tags');
             } else if (tagConnections > 0) {
                 suggestions.push(`Tags created ${tagConnections} additional pathways between clusters`);
             }
-            
+
             if (result.traversalChain.length < 3) {
                 suggestions.push('Consider increasing maxDepth to explore deeper connections');
             }
         }
-        
+
         return suggestions;
     }
 
-    private findStrongestTagConnections(tagConnections: Record<string, string[]>): any[] {
+    private findStrongestTagConnections(tagConnections: Record<string, string[]>): TagConnectionEntry[] {
         return Object.entries(tagConnections)
             .map(([tag, files]) => ({ tag, connectionCount: files.length }))
             .sort((a, b) => b.connectionCount - a.connectionCount)

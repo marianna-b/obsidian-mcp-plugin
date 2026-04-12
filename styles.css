@@ -242,6 +242,61 @@
     background: var(--interactive-success);
 }
 
+/* Tool Visibility Tree */
+.mcp-tool-tree-desc {
+    margin-bottom: 12px;
+}
+
+.mcp-tool-tree {
+    margin: 8px 0;
+}
+
+.mcp-tool-parent .setting-item-name {
+    font-weight: 600;
+}
+
+.mcp-tool-parent .setting-item-description {
+    font-size: var(--font-ui-smaller);
+    color: var(--text-muted);
+}
+
+.mcp-tool-child {
+    padding-left: 28px;
+    border-left: 2px solid var(--background-modifier-border);
+    margin-left: 14px;
+}
+
+.mcp-tool-child .setting-item-name {
+    font-family: var(--font-monospace);
+    font-size: var(--font-ui-smaller);
+}
+
+.mcp-tool-child .setting-item-description {
+    display: none;
+}
+
+.mcp-tool-child.setting-item {
+    padding-top: 4px;
+    padding-bottom: 4px;
+    border-bottom: none;
+}
+
+.mcp-tool-parent.setting-item {
+    padding-top: 10px;
+    padding-bottom: 6px;
+}
+
+.mcp-tool-disabled .setting-item-name {
+    color: var(--text-muted);
+    text-decoration: line-through;
+}
+
+.mcp-tool-count {
+    font-size: var(--font-ui-smaller);
+    color: var(--text-muted);
+    margin-left: 8px;
+}
+
 /* Easter Egg Styles */
 .mcp-version-easter-egg {
     cursor: pointer;

@@ -7,13 +7,20 @@ export interface WorkerTask {
   id: string;
   sessionId: string;
   operation: string;
-  data: any;
+  data: unknown;
 }
 
 export interface WorkerResult {
   id: string;
   success: boolean;
-  result?: any;
+  result?: unknown;
+  error?: string;
+}
+
+interface WorkerMessage {
+  type: string;
+  id?: string;
+  result?: unknown;
   error?: string;
 }
 
@@ -43,11 +50,11 @@ export class WorkerManager extends EventEmitter {
       worker = new Worker(this.workerScript);
       
       // Set up message handling
-      worker.on('message', (message: any) => {
-        this.handleWorkerMessage(sessionId, message);
+      worker.on('message', (message: unknown) => {
+        this.handleWorkerMessage(sessionId, message as WorkerMessage);
       });
       
-      worker.on('error', (error) => {
+      worker.on('error', (error: Error) => {
         Debug.error(`❌ Worker error for session ${sessionId}:`, error);
         this.handleWorkerError(sessionId, error);
       });
@@ -80,12 +87,13 @@ export class WorkerManager extends EventEmitter {
       });
       
       // Send task to worker
+      const taskData = task.data as Record<string, unknown> | undefined;
       worker.postMessage({
         id: task.id,
         type: 'process',
         request: {
           operation: task.operation,
-          action: task.data.action,
+          action: taskData?.action,
           params: task.data
         }
       });
@@ -103,24 +111,24 @@ export class WorkerManager extends EventEmitter {
   /**
    * Handle message from worker
    */
-  private handleWorkerMessage(sessionId: string, message: any): void {
+  private handleWorkerMessage(sessionId: string, message: WorkerMessage): void {
     if (message.type === 'ready') {
       Debug.log(`✅ Worker for session ${sessionId} is ready`);
       this.emit('worker-ready', sessionId);
       return;
     }
-    
+
     if (message.id && this.pendingTasks.has(message.id)) {
       const callback = this.pendingTasks.get(message.id)!;
       this.pendingTasks.delete(message.id);
-      
+
       const result: WorkerResult = {
         id: message.id,
         success: message.type === 'result',
         result: message.result,
         error: message.error
       };
-      
+
       callback(result);
     }
   }
@@ -162,7 +170,7 @@ export class WorkerManager extends EventEmitter {
     Debug.log(`🛑 Terminating all ${this.workers.size} workers`);
     const promises = [];
     
-    for (const [sessionId, worker] of this.workers) {
+    for (const [, worker] of this.workers) {
       promises.push(worker.terminate());
     }
     

@@ -1,14 +1,7 @@
-import { App, TFile, CachedMetadata } from 'obsidian';
+import { App, TFile, getAllTags } from 'obsidian';
 import { ObsidianAPI } from '../utils/obsidian-api';
 import { SearchCore } from '../utils/search-core';
-import { GraphSearchTraversal, SearchSnippet, TraversalNode, GraphSearchResult } from './graph-search-traversal';
-
-interface TagEdge {
-    source: string;
-    target: string;
-    tag: string;
-    type: 'tag-link';
-}
+import { GraphSearchTraversal, TraversalNode, GraphSearchResult } from './graph-search-traversal';
 
 export class GraphSearchTagTraversal extends GraphSearchTraversal {
     constructor(app: App, api: ObsidianAPI, searchCore: SearchCore) {
@@ -18,16 +11,16 @@ export class GraphSearchTagTraversal extends GraphSearchTraversal {
     /**
      * Get all linked paths including tag-based connections
      */
-    protected async getLinkedPathsWithTags(file: TFile, followTags: boolean = true): Promise<string[]> {
+    protected getLinkedPathsWithTags(file: TFile, followTags: boolean = true): string[] {
         const linkedPaths = new Set<string>();
         
         // First, get all normal links (forward and back)
-        const normalLinks = await this.getLinkedPaths(file);
+        const normalLinks = this.getLinkedPaths(file);
         normalLinks.forEach(path => linkedPaths.add(path));
-        
+
         // Then, add tag-based connections if enabled
         if (followTags) {
-            const tagLinks = await this.getTagConnectedPaths(file);
+            const tagLinks = this.getTagConnectedPaths(file);
             tagLinks.forEach(path => linkedPaths.add(path));
         }
         
@@ -37,30 +30,24 @@ export class GraphSearchTagTraversal extends GraphSearchTraversal {
     /**
      * Find all files that share at least one tag with the given file
      */
-    private async getTagConnectedPaths(file: TFile): Promise<string[]> {
+    private getTagConnectedPaths(file: TFile): string[] {
         const connectedPaths = new Set<string>();
         const cache = this.app.metadataCache.getFileCache(file);
         
-        if (!cache?.tags || cache.tags.length === 0) {
+        const fileTags = new Set(cache ? getAllTags(cache) || [] : []);
+        if (fileTags.size === 0) {
             return [];
         }
-        
-        // Get all tags from this file
-        const fileTags = new Set(cache.tags.map(t => t.tag));
-        
+
         // Search through all files to find ones with matching tags
         const allFiles = this.app.vault.getMarkdownFiles();
         for (const otherFile of allFiles) {
-            // Skip the same file
             if (otherFile.path === file.path) continue;
-            
+
             const otherCache = this.app.metadataCache.getFileCache(otherFile);
-            if (otherCache?.tags) {
-                // Check if any tags match
-                const hasMatchingTag = otherCache.tags.some(t => fileTags.has(t.tag));
-                if (hasMatchingTag) {
-                    connectedPaths.add(otherFile.path);
-                }
+            const otherTags = otherCache ? getAllTags(otherCache) || [] : [];
+            if (otherTags.some((t: string) => fileTags.has(t))) {
+                connectedPaths.add(otherFile.path);
             }
         }
         
@@ -127,13 +114,13 @@ export class GraphSearchTagTraversal extends GraphSearchTraversal {
                 // Only continue traversal from nodes with good matches
                 if (depth < maxDepth) {
                     // Get both link and tag connections
-                    const links = await this.getLinkedPathsWithTags(file, followTags);
+                    const links = this.getLinkedPathsWithTags(file, followTags);
                     
                     // For each linked path, determine if it's a tag or link connection
                     for (const linkedPath of links) {
                         if (!visited.has(linkedPath)) {
                             // Check if this is a normal link or tag connection
-                            const normalLinks = await this.getLinkedPaths(file);
+                            const normalLinks = this.getLinkedPaths(file);
                             const isTagConnection = !normalLinks.includes(linkedPath);
                             
                             if (isTagConnection) {
@@ -168,7 +155,7 @@ export class GraphSearchTagTraversal extends GraphSearchTraversal {
     /**
      * Get shared tags between two files
      */
-    async getSharedTags(path1: string, path2: string): Promise<string[]> {
+    getSharedTags(path1: string, path2: string): string[] {
         const file1 = this.app.vault.getAbstractFileByPath(path1);
         const file2 = this.app.vault.getAbstractFileByPath(path2);
         
@@ -178,14 +165,10 @@ export class GraphSearchTagTraversal extends GraphSearchTraversal {
         
         const cache1 = this.app.metadataCache.getFileCache(file1);
         const cache2 = this.app.metadataCache.getFileCache(file2);
-        
-        if (!cache1?.tags || !cache2?.tags) {
-            return [];
-        }
-        
-        const tags1 = new Set(cache1.tags.map(t => t.tag));
-        const tags2 = new Set(cache2.tags.map(t => t.tag));
-        
-        return Array.from(tags1).filter(tag => tags2.has(tag));
+
+        const tags1 = new Set(cache1 ? getAllTags(cache1) || [] : []);
+        const tags2 = cache2 ? getAllTags(cache2) || [] : [];
+
+        return tags2.filter(tag => tags1.has(tag));
     }
 }

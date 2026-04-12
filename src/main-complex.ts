@@ -33,7 +33,7 @@ export default class ObsidianMCPPlugin extends Plugin {
 		// Add command to restart server
 		this.addCommand({
 			id: 'restart-mcp-server',
-			name: 'Restart MCP Server',
+			name: 'Restart mcp server',
 			callback: () => {
 				Debug.log('MCP Server restart requested');
 				// TODO: Implement server restart
@@ -51,9 +51,9 @@ export default class ObsidianMCPPlugin extends Plugin {
 		Debug.log('Obsidian MCP Plugin loaded successfully');
 	}
 
-	async onunload() {
+	onunload() {
 		Debug.log('Unloading Obsidian MCP Plugin');
-		await this.stopMCPServer();
+		void this.stopMCPServer();
 	}
 
 	private async startMCPServer(): Promise<void> {
@@ -79,16 +79,16 @@ export default class ObsidianMCPPlugin extends Plugin {
 		const statusBarItemEl = this.addStatusBarItem();
 		
 		if (!this.settings.httpEnabled) {
-			statusBarItemEl.setText('MCP: Disabled');
+			statusBarItemEl.setText('Mcp: disabled');
 		} else if (this.mcpServer?.isServerRunning()) {
 			statusBarItemEl.setText(`MCP: :${this.settings.httpPort}`);
 		} else {
-			statusBarItemEl.setText('MCP: Error');
+			statusBarItemEl.setText('Mcp: error');
 		}
 	}
 
 	async loadSettings() {
-		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData());
+		this.settings = Object.assign({}, DEFAULT_SETTINGS, await this.loadData() as Partial<MCPPluginSettings>);
 	}
 
 	async saveSettings() {
@@ -109,11 +109,11 @@ class MCPSettingTab extends PluginSettingTab {
 
 		containerEl.empty();
 
-		containerEl.createEl('h2', {text: 'Obsidian MCP Plugin Settings'});
+		new Setting(containerEl).setName("Plugin configuration").setHeading();
 
 		new Setting(containerEl)
-			.setName('Enable HTTP Server')
-			.setDesc('Enable the HTTP server for REST API and MCP access')
+			.setName('Enable HTTP server')
+			.setDesc('Enable the HTTP server for REST API and mcp access')
 			.addToggle(toggle => toggle
 				.setValue(this.plugin.settings.httpEnabled)
 				.onChange(async (value) => {
@@ -122,8 +122,8 @@ class MCPSettingTab extends PluginSettingTab {
 				}));
 
 		new Setting(containerEl)
-			.setName('HTTP Port')
-			.setDesc('Port for HTTP MCP server (default: 3001)')
+			.setName('Server port')
+			.setDesc('Port for the server (default: 3001)')
 			.addText(text => text
 				.setPlaceholder('3001')
 				.setValue(this.plugin.settings.httpPort.toString())
@@ -136,8 +136,8 @@ class MCPSettingTab extends PluginSettingTab {
 				}));
 
 		new Setting(containerEl)
-			.setName('HTTPS Port')
-			.setDesc('Port for HTTPS MCP server (default: 3002)')
+			.setName('Secure port')
+			.setDesc('Port for secure connections (default: 3002)')
 			.addText(text => text
 				.setPlaceholder('3002')
 				.setValue(this.plugin.settings.httpsPort.toString())
@@ -160,7 +160,7 @@ class MCPSettingTab extends PluginSettingTab {
 				}));
 
 		new Setting(containerEl)
-			.setName('Debug Logging')
+			.setName('Debug logging')
 			.setDesc('Enable detailed debug logging')
 			.addToggle(toggle => toggle
 				.setValue(this.plugin.settings.debugLogging)

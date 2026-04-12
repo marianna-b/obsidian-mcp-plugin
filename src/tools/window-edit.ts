@@ -1,7 +1,35 @@
 import { ObsidianAPI } from '../utils/obsidian-api';
-import { findFuzzyMatches, extractContext } from '../utils/fuzzy-match';
+import { findFuzzyMatches } from '../utils/fuzzy-match';
 import { ContentBufferManager } from '../utils/content-buffer';
 import { isImageFile } from '../types/obsidian';
+
+interface WindowEditArgs {
+  path: string;
+  oldText: string;
+  newText: string;
+  fuzzyThreshold?: number;
+  contextLines?: number;
+}
+
+interface BufferEditArgs {
+  path: string;
+  oldText?: string;
+  fuzzyThreshold?: number;
+}
+
+interface InsertAtLineArgs {
+  path: string;
+  lineNumber: number;
+  content?: string;
+  mode?: 'before' | 'after' | 'replace';
+}
+
+interface ViewWindowArgs {
+  path: string;
+  searchText?: string;
+  lineNumber?: number;
+  windowSize?: number;
+}
 
 // Shared edit logic to avoid circular references
 export async function performWindowEdit(
@@ -119,7 +147,7 @@ export const windowEditTools = [
       },
       required: ['path', 'oldText', 'newText']
     },
-    handler: async (api: ObsidianAPI, args: any) => {
+    handler: async (api: ObsidianAPI, args: WindowEditArgs) => {
       try {
         return await performWindowEdit(
           api,
@@ -128,18 +156,18 @@ export const windowEditTools = [
           args.newText,
           args.fuzzyThreshold || 0.7
         );
-      } catch (error: any) {
+      } catch (error: unknown) {
         return {
           content: [{
             type: 'text',
-            text: `Error: ${error.message}`
+            text: `Error: ${error instanceof Error ? error.message : String(error)}`
           }],
           isError: true
         };
       }
     }
   },
-  
+
   {
     name: 'edit_vault_from_buffer',
     description: 'Retry an edit using previously buffered content',
@@ -162,10 +190,10 @@ export const windowEditTools = [
       },
       required: ['path']
     },
-    handler: async (api: ObsidianAPI, args: any) => {
+    handler: async (api: ObsidianAPI, args: BufferEditArgs) => {
       const buffer = ContentBufferManager.getInstance();
       const buffered = buffer.retrieve();
-      
+
       if (!buffered) {
         return {
           content: [{
@@ -175,10 +203,10 @@ export const windowEditTools = [
           isError: true
         };
       }
-      
+
       // Use provided search text or try to extract from buffered content
       const searchText = args.oldText || buffered.searchText || buffered.content.split('\n')[0].substring(0, 50);
-      
+
       // Use the shared edit function with buffered content
       try {
         return await performWindowEdit(
@@ -188,18 +216,18 @@ export const windowEditTools = [
           buffered.content,
           args.fuzzyThreshold || 0.7
         );
-      } catch (error: any) {
+      } catch (error: unknown) {
         return {
           content: [{
             type: 'text',
-            text: `Error: ${error.message}`
+            text: `Error: ${error instanceof Error ? error.message : String(error)}`
           }],
           isError: true
         };
       }
     }
   },
-  
+
   {
     name: 'insert_vault_at_line',
     description: 'Insert content at a specific line number',
@@ -227,7 +255,7 @@ export const windowEditTools = [
       },
       required: ['path', 'lineNumber']
     },
-    handler: async (api: ObsidianAPI, args: any) => {
+    handler: async (api: ObsidianAPI, args: InsertAtLineArgs) => {
       try {
         // Get content to insert
         let insertContent = args.content;
@@ -245,7 +273,7 @@ export const windowEditTools = [
           }
           insertContent = buffered.content;
         }
-        
+
         // Get current file content
         const file = await api.getFile(args.path);
         if (isImageFile(file)) {
@@ -253,7 +281,7 @@ export const windowEditTools = [
         }
         const content = typeof file === 'string' ? file : file.content;
         const lines = content.split('\n');
-        
+
         // Validate line number
         if (args.lineNumber < 1 || args.lineNumber > lines.length + 1) {
           return {
@@ -264,11 +292,11 @@ export const windowEditTools = [
             isError: true
           };
         }
-        
+
         // Perform the insertion
         const lineIndex = args.lineNumber - 1;
         const mode = args.mode || 'replace';
-        
+
         switch (mode) {
           case 'before':
             lines.splice(lineIndex, 0, insertContent);
@@ -280,29 +308,29 @@ export const windowEditTools = [
             lines[lineIndex] = insertContent;
             break;
         }
-        
+
         const newContent = lines.join('\n');
         await api.updateFile(args.path, newContent);
-        
+
         return {
           content: [{
             type: 'text',
             text: `Successfully ${mode === 'replace' ? 'replaced' : 'inserted'} content at line ${args.lineNumber} in ${args.path}`
           }]
         };
-        
-      } catch (error: any) {
+
+      } catch (error: unknown) {
         return {
           content: [{
             type: 'text',
-            text: `Error: ${error.message}`
+            text: `Error: ${error instanceof Error ? error.message : String(error)}`
           }],
           isError: true
         };
       }
     }
   },
-  
+
   {
     name: 'view_vault_window',
     description: 'View a portion of a file with optional search highlighting',
@@ -329,7 +357,7 @@ export const windowEditTools = [
       },
       required: ['path']
     },
-    handler: async (api: ObsidianAPI, args: any) => {
+    handler: async (api: ObsidianAPI, args: ViewWindowArgs) => {
       try {
         const file = await api.getFile(args.path);
         if (isImageFile(file)) {
@@ -337,9 +365,9 @@ export const windowEditTools = [
         }
         const content = typeof file === 'string' ? file : file.content;
         const lines = content.split('\n');
-        
+
         let centerLine = args.lineNumber || 1;
-        
+
         // If search text provided, find it
         if (args.searchText && !args.lineNumber) {
           const matches = findFuzzyMatches(content, args.searchText, 0.6);
@@ -347,13 +375,13 @@ export const windowEditTools = [
             centerLine = matches[0].lineNumber;
           }
         }
-        
+
         // Calculate window
         const windowSize = args.windowSize || 20;
         const halfWindow = Math.floor(windowSize / 2);
         const startLine = Math.max(1, centerLine - halfWindow);
         const endLine = Math.min(lines.length, centerLine + halfWindow);
-        
+
         // Build output with line numbers
         const windowLines = [];
         for (let i = startLine; i <= endLine; i++) {
@@ -361,26 +389,26 @@ export const windowEditTools = [
           const marker = i === centerLine ? '>' : ' ';
           windowLines.push(`${marker} ${i.toString().padStart(4)}: ${line}`);
         }
-        
+
         let output = `File: ${args.path}\n`;
         output += `Lines ${startLine}-${endLine} of ${lines.length}\n`;
         if (args.searchText) {
           output += `Centered on: "${args.searchText}"\n`;
         }
         output += '\n' + windowLines.join('\n');
-        
+
         return {
           content: [{
             type: 'text',
             text: output
           }]
         };
-        
-      } catch (error: any) {
+
+      } catch (error: unknown) {
         return {
           content: [{
             type: 'text',
-            text: `Error: ${error.message}`
+            text: `Error: ${error instanceof Error ? error.message : String(error)}`
           }],
           isError: true
         };

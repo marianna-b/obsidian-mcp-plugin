@@ -18,11 +18,13 @@ import {
 export interface DataviewQueryResponse {
   query: string;
   type: 'list' | 'table' | 'task' | 'calendar';
-  values?: any[];
+  values?: DataviewValue[];
   headers?: string[];
   successful: boolean;
   error?: string;
 }
+
+type DataviewValue = Record<string, unknown> | unknown[] | string | number | boolean | null;
 
 export function formatDataviewQuery(response: DataviewQueryResponse): string {
   const lines: string[] = [];
@@ -65,7 +67,7 @@ export function formatDataviewQuery(response: DataviewQueryResponse): string {
   return joinLines(lines);
 }
 
-function formatDataviewTable(headers: string[], rows: any[]): string {
+function formatDataviewTable(headers: string[], rows: DataviewValue[]): string {
   const lines: string[] = [];
 
   // Limit columns for readability
@@ -79,8 +81,16 @@ function formatDataviewTable(headers: string[], rows: any[]): string {
   // Data rows (limit to 20)
   rows.slice(0, 20).forEach(row => {
     const cells = displayHeaders.map((_, i) => {
-      const val = Array.isArray(row) ? row[i] : row[headers[i]];
-      return truncate(String(val ?? ''), 30);
+      let val: unknown;
+      if (Array.isArray(row)) {
+        val = row[i];
+      } else if (row !== null && typeof row === 'object') {
+        val = row[headers[i]];
+      }
+      const display = val === null || val === undefined
+        ? ''
+        : typeof val === 'object' ? JSON.stringify(val) : String(val as string | number | boolean);
+      return truncate(display, 30);
     });
     lines.push('| ' + cells.join(' | ') + (hasMore ? ' | ...' : '') + ' |');
   });
@@ -92,11 +102,18 @@ function formatDataviewTable(headers: string[], rows: any[]): string {
   return lines.join('\n');
 }
 
-function formatDataviewList(items: any[]): string {
+function formatDataviewList(items: DataviewValue[]): string {
   const lines: string[] = [];
 
   items.slice(0, 30).forEach((item, i) => {
-    const text = typeof item === 'object' ? (item.path || item.file?.path || JSON.stringify(item)) : String(item);
+    let text: string;
+    if (item && typeof item === 'object') {
+      const obj = item as Record<string, unknown>;
+      const filePath = obj.path ?? (obj.file as Record<string, unknown> | undefined)?.path;
+      text = typeof filePath === 'string' ? filePath : JSON.stringify(item);
+    } else {
+      text = String(item);
+    }
     lines.push(`${i + 1}. ${truncate(text, 60)}`);
   });
 
@@ -107,12 +124,25 @@ function formatDataviewList(items: any[]): string {
   return lines.join('\n');
 }
 
-function formatDataviewTasks(tasks: any[]): string {
+interface DataviewTask {
+  completed?: boolean;
+  text?: string;
+  task?: string;
+  path?: string;
+}
+
+function formatDataviewTasks(tasks: DataviewValue[]): string {
   const lines: string[] = [];
 
-  tasks.slice(0, 30).forEach(task => {
+  tasks.slice(0, 30).forEach(taskItem => {
+    const task = (taskItem !== null && typeof taskItem === 'object' && !Array.isArray(taskItem)
+      ? taskItem
+      : {}) as DataviewTask;
     const checkbox = task.completed ? '[x]' : '[ ]';
-    const text = task.text || task.task || String(task);
+    const taskString = taskItem !== null && typeof taskItem === 'object'
+      ? JSON.stringify(taskItem)
+      : String(taskItem);
+    const text = task.text || task.task || taskString;
     lines.push(`- ${checkbox} ${truncate(text, 60)}`);
     if (task.path) {
       lines.push(`      from: ${task.path}`);
@@ -159,9 +189,16 @@ export function formatDataviewStatus(response: DataviewStatusResponse): string {
 /**
  * Format bases.query response
  */
+interface BasesQueryResult {
+  title?: string;
+  name?: string;
+  path?: string;
+  [key: string]: unknown;
+}
+
 export interface BasesQueryResponse {
   basePath: string;
-  results: any[];
+  results: BasesQueryResult[];
   totalCount: number;
 }
 
@@ -198,6 +235,199 @@ export function formatBasesQuery(response: BasesQueryResponse): string {
 
   lines.push(divider());
   lines.push(tip('Use filters to narrow down results'));
+  lines.push(summaryFooter());
+
+  return joinLines(lines);
+}
+
+/**
+ * Format bases.list response
+ */
+export interface BasesListResponse {
+  bases: string[];
+  count?: number;
+}
+
+export function formatBasesList(response: BasesListResponse | string[]): string {
+  const lines: string[] = [];
+
+  // Handle both array and object response
+  const bases = Array.isArray(response) ? response : response.bases;
+  const count = Array.isArray(response) ? response.length : (response.count ?? response.bases.length);
+
+  lines.push(header(1, 'Available Bases'));
+  lines.push('');
+  lines.push(`Found ${count} base file${count !== 1 ? 's' : ''}`);
+  lines.push('');
+
+  if (bases.length === 0) {
+    lines.push('No .base files found in vault.');
+    lines.push('');
+    lines.push(tip('Create a .base file to define a structured database'));
+    lines.push(summaryFooter());
+    return joinLines(lines);
+  }
+
+  bases.slice(0, 30).forEach((base, i) => {
+    const name = base.split('/').pop() || base;
+    lines.push(`${i + 1}. ${name}`);
+    lines.push(`   ${base}`);
+  });
+
+  if (bases.length > 30) {
+    lines.push(`\n... and ${bases.length - 30} more`);
+  }
+
+  lines.push('');
+  lines.push(divider());
+  lines.push(tip('Use `bases.read(path)` to view a base configuration'));
+  lines.push(tip('Use `bases.query(path)` to query data from a base'));
+  lines.push(summaryFooter());
+
+  return joinLines(lines);
+}
+
+/**
+ * Format bases.read response
+ */
+export interface BasesReadResponse {
+  path: string;
+  config: {
+    name?: string;
+    source?: string;
+    properties?: Record<string, unknown>;
+    views?: unknown[];
+  };
+  raw?: string;
+}
+
+export function formatBasesRead(response: BasesReadResponse): string {
+  const lines: string[] = [];
+
+  const fileName = response.path.split('/').pop() || response.path;
+  lines.push(header(1, `Base: ${fileName}`));
+  lines.push('');
+  lines.push(property('Path', response.path, 0));
+
+  if (response.config.name) {
+    lines.push(property('Name', response.config.name, 0));
+  }
+  if (response.config.source) {
+    lines.push(property('Source', response.config.source, 0));
+  }
+  lines.push('');
+
+  // Show properties
+  if (response.config.properties && Object.keys(response.config.properties).length > 0) {
+    lines.push(header(2, 'Properties'));
+    Object.entries(response.config.properties).slice(0, 10).forEach(([key, value]) => {
+      let displayValue: string;
+      if (value === null || value === undefined) {
+        displayValue = String(value);
+      } else if (typeof value === 'object') {
+        displayValue = JSON.stringify(value);
+      } else {
+        displayValue = String(value as string | number | boolean);
+      }
+      lines.push(property(key, truncate(displayValue, 50), 0));
+    });
+    if (Object.keys(response.config.properties).length > 10) {
+      lines.push(`... and ${Object.keys(response.config.properties).length - 10} more properties`);
+    }
+    lines.push('');
+  }
+
+  // Show views count
+  if (response.config.views && response.config.views.length > 0) {
+    lines.push(property('Views', response.config.views.length.toString(), 0));
+  }
+
+  lines.push(divider());
+  lines.push(tip('Use `bases.query(path)` to query data from this base'));
+  lines.push(summaryFooter());
+
+  return joinLines(lines);
+}
+
+/**
+ * Format bases.create response
+ */
+export interface BasesCreateResponse {
+  success: boolean;
+  path: string;
+  error?: string;
+}
+
+export function formatBasesCreate(response: BasesCreateResponse): string {
+  const lines: string[] = [];
+
+  const icon = response.success ? '✓' : '✗';
+  lines.push(header(1, `${icon} Created Base`));
+  lines.push('');
+
+  if (response.success) {
+    lines.push(`Base created successfully.`);
+    lines.push('');
+    lines.push(property('Path', response.path, 0));
+    lines.push('');
+    lines.push(tip('Use `bases.read(path)` to view the configuration'));
+    lines.push(tip('Use `bases.query(path)` to query data'));
+  } else {
+    lines.push('Failed to create base.');
+    if (response.error) {
+      lines.push('');
+      lines.push(property('Error', response.error, 0));
+    }
+  }
+
+  lines.push(summaryFooter());
+
+  return joinLines(lines);
+}
+
+/**
+ * Format bases.export response
+ */
+export interface BasesExportResponse {
+  success: boolean;
+  format: 'csv' | 'json' | 'markdown';
+  data: string;
+  rowCount?: number;
+}
+
+export function formatBasesExport(response: BasesExportResponse): string {
+  const lines: string[] = [];
+
+  const icon = response.success ? '✓' : '✗';
+  lines.push(header(1, `${icon} Exported Base`));
+  lines.push('');
+
+  if (response.success) {
+    lines.push(property('Format', response.format.toUpperCase(), 0));
+    if (response.rowCount !== undefined) {
+      lines.push(property('Rows', response.rowCount.toString(), 0));
+    }
+    lines.push('');
+
+    lines.push(header(2, 'Data'));
+    lines.push('');
+
+    // Show preview of data
+    const maxLength = 2000;
+    if (response.data.length > maxLength) {
+      lines.push('```');
+      lines.push(response.data.substring(0, maxLength));
+      lines.push('```');
+      lines.push(`\n... (${response.data.length - maxLength} more characters)`);
+    } else {
+      lines.push('```');
+      lines.push(response.data);
+      lines.push('```');
+    }
+  } else {
+    lines.push('Export failed.');
+  }
+
   lines.push(summaryFooter());
 
   return joinLines(lines);

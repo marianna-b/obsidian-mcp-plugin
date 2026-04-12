@@ -11,9 +11,7 @@ import {
   divider,
   tip,
   summaryFooter,
-  joinLines,
-  formatPath,
-  formatTree
+  joinLines
 } from './utils';
 
 /**
@@ -39,7 +37,7 @@ export function formatFileList(response: FileListResponse | string[]): string {
 
   // Handle simple string array response
   if (Array.isArray(response)) {
-    const paths = response as string[];
+    const paths = response;
     lines.push(header(1, 'Files'));
     lines.push('');
     lines.push(`Found ${paths.length} item${paths.length !== 1 ? 's' : ''}`);
@@ -137,7 +135,7 @@ export interface FileReadResponse {
     created?: number;
     extension: string;
   };
-  frontmatter?: Record<string, any>;
+  frontmatter?: Record<string, unknown>;
   tags?: string[];
   originalContentLength?: number;
   fragmentMetadata?: {
@@ -177,9 +175,15 @@ export function formatFileRead(response: FileReadResponse): string {
     const keys = Object.keys(frontmatter).slice(0, 10);
     keys.forEach(key => {
       const value = frontmatter[key];
-      const displayValue = typeof value === 'object'
-        ? JSON.stringify(value).substring(0, 50)
-        : String(value).substring(0, 50);
+      let displayValue: string;
+      if (value === null || value === undefined) {
+        displayValue = String(value);
+      } else if (typeof value === 'object') {
+        displayValue = JSON.stringify(value).substring(0, 50);
+      } else {
+        // Primitives (string, number, boolean, bigint, symbol) are safe to stringify
+        displayValue = String(value as string | number | boolean | bigint | symbol).substring(0, 50);
+      }
       lines.push(property(key, displayValue, 0));
     });
     if (Object.keys(frontmatter).length > 10) {
@@ -192,7 +196,7 @@ export function formatFileRead(response: FileReadResponse): string {
 
   if (Array.isArray(content)) {
     // Fragment-based response
-    const fragments = content as FileReadFragment[];
+    const fragments = content;
     if (fragmentMetadata) {
       lines.push(header(2, `Content (${fragmentMetadata.totalFragments} fragment${fragmentMetadata.totalFragments !== 1 ? 's' : ''})`));
     } else {
@@ -324,6 +328,100 @@ export function formatFileMove(response: FileMoveResponse): string {
     lines.push(`Failed to ${response.operation} file.`);
   }
 
+  lines.push(summaryFooter());
+
+  return joinLines(lines);
+}
+
+/**
+ * Format file split response
+ */
+export interface FileSplitResponse {
+  success: boolean;
+  sourceFile: string;
+  createdFiles: string[];
+  totalFiles: number;
+  splitBy?: string;
+}
+
+export function formatFileSplit(response: FileSplitResponse): string {
+  const lines: string[] = [];
+
+  const icon = response.success ? '✓' : '✗';
+  lines.push(header(1, `${icon} Split: ${response.sourceFile}`));
+  lines.push('');
+
+  if (response.success) {
+    lines.push(property('Source', response.sourceFile, 0));
+    lines.push(property('Created', `${response.totalFiles} files`, 0));
+    if (response.splitBy) {
+      lines.push(property('Split by', response.splitBy, 0));
+    }
+    lines.push('');
+
+    lines.push(header(2, 'Created Files'));
+    response.createdFiles.slice(0, 20).forEach(file => {
+      const name = file.split('/').pop() || file;
+      lines.push(`- ${name}`);
+    });
+    if (response.createdFiles.length > 20) {
+      lines.push(`- ... and ${response.createdFiles.length - 20} more`);
+    }
+  } else {
+    lines.push('Failed to split file.');
+  }
+
+  lines.push('');
+  lines.push(divider());
+  lines.push(tip('Use `vault.read(path)` to read any of the created files'));
+  lines.push(summaryFooter());
+
+  return joinLines(lines);
+}
+
+/**
+ * Format file combine/concatenate response
+ */
+export interface FileCombineResponse {
+  success: boolean;
+  destination: string;
+  filesCombined: number;
+  totalSize?: number;
+  sourceFiles?: string[];
+}
+
+export function formatFileCombine(response: FileCombineResponse): string {
+  const lines: string[] = [];
+
+  const icon = response.success ? '✓' : '✗';
+  lines.push(header(1, `${icon} Combined: ${response.destination}`));
+  lines.push('');
+
+  if (response.success) {
+    lines.push(property('Destination', response.destination, 0));
+    lines.push(property('Files combined', response.filesCombined.toString(), 0));
+    if (response.totalSize !== undefined) {
+      lines.push(property('Total size', formatFileSize(response.totalSize), 0));
+    }
+    lines.push('');
+
+    if (response.sourceFiles && response.sourceFiles.length > 0) {
+      lines.push(header(2, 'Source Files'));
+      response.sourceFiles.slice(0, 10).forEach(file => {
+        const name = file.split('/').pop() || file;
+        lines.push(`- ${name}`);
+      });
+      if (response.sourceFiles.length > 10) {
+        lines.push(`- ... and ${response.sourceFiles.length - 10} more`);
+      }
+    }
+  } else {
+    lines.push('Failed to combine files.');
+  }
+
+  lines.push('');
+  lines.push(divider());
+  lines.push(tip('Use `vault.read(path)` to view the combined file'));
   lines.push(summaryFooter());
 
   return joinLines(lines);

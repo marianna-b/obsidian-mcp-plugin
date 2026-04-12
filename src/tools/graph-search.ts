@@ -1,5 +1,5 @@
 import { ObsidianAPI } from '../utils/obsidian-api';
-import { GraphTraversal, GraphTraversalOptions, GraphNode, GraphEdge } from '../utils/graph-traversal';
+import { GraphTraversal, GraphTraversalOptions, GraphNode } from '../utils/graph-traversal';
 import { App, TFile } from 'obsidian';
 
 /**
@@ -53,7 +53,9 @@ export interface GraphSearchResult {
     type: 'link' | 'embed' | 'tag';
     count: number;
   }>;
-  paths?: string[][];
+  found?: boolean;
+  paths?: Array<Array<{ path: string; title: string }>> | string[][];
+  shortestLength?: number;
   statistics?: {
     inDegree: number;
     outDegree: number;
@@ -91,7 +93,7 @@ export class GraphSearchTool {
   /**
    * Execute a graph search operation
    */
-  async search(params: GraphSearchParams): Promise<GraphSearchResult> {
+  search(params: GraphSearchParams): GraphSearchResult {
     const { operation } = params;
     
     switch (operation) {
@@ -107,15 +109,17 @@ export class GraphSearchTool {
         return this.getBacklinks(params);
       case 'forwardlinks':
         return this.getForwardLinks(params);
-      default:
-        throw new Error(`Unknown graph operation: ${operation}`);
+      default: {
+        const exhaustiveCheck: never = operation;
+        throw new Error(`Unknown graph operation: ${String(exhaustiveCheck)}`);
+      }
     }
   }
 
   /**
    * Perform graph traversal from a starting point
    */
-  private async performTraversal(params: GraphSearchParams): Promise<GraphSearchResult> {
+  private performTraversal(params: GraphSearchParams): GraphSearchResult {
     if (!params.sourcePath && params.sourcePath !== '') {
       throw new Error('Source path is required for traversal operation');
     }
@@ -139,7 +143,7 @@ export class GraphSearchTool {
       options.nodeFilter = (node: GraphNode) => node.path.startsWith(params.folderFilter!);
     }
 
-    const result = await this.graphTraversal.breadthFirstTraversal(params.sourcePath, options);
+    const result = this.graphTraversal.breadthFirstTraversal(params.sourcePath, options);
     
     // Convert to response format
     const nodes = Array.from(result.nodes.values()).map(node => ({
@@ -192,7 +196,7 @@ export class GraphSearchTool {
   /**
    * Get immediate neighbors of a node
    */
-  private async getNeighbors(params: GraphSearchParams): Promise<GraphSearchResult> {
+  private getNeighbors(params: GraphSearchParams): GraphSearchResult {
     if (!params.sourcePath) {
       throw new Error('Source path is required for neighbors operation');
     }
@@ -239,39 +243,49 @@ export class GraphSearchTool {
   /**
    * Find path(s) between two nodes
    */
-  private async findPath(params: GraphSearchParams): Promise<GraphSearchResult> {
+  private findPath(params: GraphSearchParams): GraphSearchResult {
     if (!params.sourcePath || !params.targetPath) {
       throw new Error('Both source and target paths are required for path operation');
     }
 
     // First try shortest path
-    const shortestPath = await this.graphTraversal.findShortestPath(
+    const shortestPath = this.graphTraversal.findShortestPath(
       params.sourcePath,
       params.targetPath,
       { followBacklinks: params.followBacklinks !== false }
     );
 
-    let paths: string[][] = [];
+    let rawPaths: string[][] = [];
     if (shortestPath) {
-      paths.push(shortestPath);
-      
+      rawPaths.push(shortestPath);
+
       // Optionally find all paths if requested
       if (params.maxDepth && params.maxDepth > shortestPath.length) {
-        const allPaths = await this.graphTraversal.findAllPaths(
+        const allPaths = this.graphTraversal.findAllPaths(
           params.sourcePath,
           params.targetPath,
           params.maxDepth
         );
-        paths = allPaths.slice(0, 10); // Limit to 10 paths
+        rawPaths = allPaths.slice(0, 10); // Limit to 10 paths
       }
     }
+
+    // Convert string paths to node objects for the formatter
+    const paths = rawPaths.map(pathList =>
+      pathList.map(filePath => ({
+        path: filePath,
+        title: filePath.replace(/\.md$/, '').split('/').pop() || filePath
+      }))
+    );
 
     return {
       operation: 'path',
       sourcePath: params.sourcePath,
       targetPath: params.targetPath,
+      found: paths.length > 0,
       paths,
-      message: paths.length > 0 
+      shortestLength: paths.length > 0 ? paths[0].length - 1 : undefined,
+      message: paths.length > 0
         ? `Found ${paths.length} path(s) between files. Shortest path has ${paths[0].length} nodes.`
         : 'No path found between the specified files',
       workflow: {
@@ -303,7 +317,7 @@ export class GraphSearchTool {
   /**
    * Get link statistics for a file
    */
-  private async getStatistics(params: GraphSearchParams): Promise<GraphSearchResult> {
+  private getStatistics(params: GraphSearchParams): GraphSearchResult {
     if (!params.sourcePath) {
       throw new Error('Source path is required for statistics operation');
     }
@@ -342,7 +356,7 @@ export class GraphSearchTool {
   /**
    * Get backlinks (incoming links) for a file
    */
-  private async getBacklinks(params: GraphSearchParams): Promise<GraphSearchResult> {
+  private getBacklinks(params: GraphSearchParams): GraphSearchResult {
     if (!params.sourcePath) {
       throw new Error('Source path is required for backlinks operation');
     }
@@ -398,7 +412,7 @@ export class GraphSearchTool {
   /**
    * Get forward links (outgoing links) from a file
    */
-  private async getForwardLinks(params: GraphSearchParams): Promise<GraphSearchResult> {
+  private getForwardLinks(params: GraphSearchParams): GraphSearchResult {
     if (!params.sourcePath) {
       throw new Error('Source path is required for forward links operation');
     }

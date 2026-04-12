@@ -75,7 +75,7 @@ export interface VaultOperation {
 	context?: {
 		method?: string;
 		contentSize?: number;
-		[key: string]: any;
+		[key: string]: unknown;
 	};
 }
 
@@ -91,7 +91,7 @@ export interface ValidatedOperation extends VaultOperation {
 /**
  * Security audit log entry
  */
-interface SecurityLogEntry {
+export interface SecurityLogEntry {
 	timestamp: number;
 	operation: VaultOperation;
 	result: 'allowed' | 'blocked';
@@ -122,6 +122,7 @@ export class VaultSecurityManager {
 	 * Validates both permissions and paths
 	 */
 	async validateOperation(operation: VaultOperation): Promise<ValidatedOperation> {
+		await Promise.resolve(); // Ensure async behavior for callers that expect rejected promises on throw
 		Debug.log(`🔐 VaultSecurityManager.validateOperation called for: ${operation.type} on "${operation.path}"`);
 		try {
 			// Step 1: Check if security is enabled
@@ -133,21 +134,21 @@ export class VaultSecurityManager {
 						'PERMISSION_DENIED'
 					);
 				}
-				
+
 				// Return operation as-is without path validation
 				// Cast paths to ValidatedPath since we're bypassing validation
 				const result = {
 					...operation,
 					validatedAt: Date.now()
 				};
-				
+
 				if (operation.path) {
 					result.path = operation.path as ValidatedPath;
 				}
 				if (operation.targetPath) {
 					result.targetPath = operation.targetPath as ValidatedPath;
 				}
-				
+
 				return result as ValidatedOperation;
 			}
 
@@ -161,10 +162,8 @@ export class VaultSecurityManager {
 			}
 
 			// Step 3: Validate paths if present
-			const validated: any = {
-				...operation,
-				validatedAt: Date.now()
-			};
+			let validatedPath: ValidatedPath | undefined;
+			let validatedTargetPath: ValidatedPath | undefined;
 
 			if (operation.path) {
 				// Check if path is in blocked list
@@ -177,13 +176,13 @@ export class VaultSecurityManager {
 				}
 
 				// Validate path security
-				validated.path = this.validator.validatePath(operation.path) as ValidatedPath;
+				validatedPath = this.validator.validatePath(operation.path) as ValidatedPath;
 
 				// Check if validated path is in allowed list (if specified)
-				if (!this.isPathAllowed(validated.path)) {
+				if (!this.isPathAllowed(validatedPath)) {
 					this.logSecurityEvent(operation, 'blocked', 'PATH_NOT_ALLOWED');
 					throw new SecurityError(
-						`Access to path '${validated.path}' is not allowed`,
+						`Access to path '${validatedPath}' is not allowed`,
 						'PATH_NOT_ALLOWED'
 					);
 				}
@@ -199,16 +198,24 @@ export class VaultSecurityManager {
 					);
 				}
 
-				validated.targetPath = this.validator.validatePath(operation.targetPath) as ValidatedPath;
+				validatedTargetPath = this.validator.validatePath(operation.targetPath) as ValidatedPath;
 
-				if (!this.isPathAllowed(validated.targetPath)) {
+				if (!this.isPathAllowed(validatedTargetPath)) {
 					this.logSecurityEvent(operation, 'blocked', 'TARGET_PATH_NOT_ALLOWED');
 					throw new SecurityError(
-						`Access to target path '${validated.targetPath}' is not allowed`,
+						`Access to target path '${validatedTargetPath}' is not allowed`,
 						'TARGET_PATH_NOT_ALLOWED'
 					);
 				}
 			}
+
+			// Build the validated operation
+			const validated: ValidatedOperation = {
+				...operation,
+				path: validatedPath,
+				targetPath: validatedTargetPath,
+				validatedAt: Date.now()
+			};
 
 			// Step 5: Check sandbox mode
 			if (this.settings.sandboxMode) {
@@ -218,7 +225,7 @@ export class VaultSecurityManager {
 			// Step 6: Log successful validation
 			this.logSecurityEvent(validated, 'allowed');
 
-			return validated as ValidatedOperation;
+			return validated;
 		} catch (error) {
 			// Log any errors that aren't already logged
 			if (!(error instanceof SecurityError)) {

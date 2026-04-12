@@ -1,3 +1,4 @@
+// eslint-disable-next-line import/no-extraneous-dependencies -- Test file, jest is a devDependency
 import { describe, it, expect } from '@jest/globals';
 import {
   estimateTokens,
@@ -7,6 +8,24 @@ import {
   limitResponse,
   DEFAULT_LIMITER_CONFIG
 } from '../response-limiter';
+
+/** Shape of a processed search result from limitSearchResults */
+interface ProcessedSearchResult {
+  path: string;
+  title: string;
+  preview?: string;
+  contentHash?: string;
+  contentLength?: number;
+  score?: number;
+}
+
+/** Shape of a truncated object response from limitResponse */
+interface TruncatedObjectResponse {
+  error?: string;
+  message?: string;
+  data?: string;
+  _truncated?: boolean;
+}
 
 describe('Response Limiter', () => {
   describe('estimateTokens', () => {
@@ -76,11 +95,11 @@ describe('Response Limiter', () => {
       expect(limited.originalCount).toBe(2);
       expect(limited.results).toHaveLength(2);
       
-      const result1 = limited.results[0];
+      const result1 = limited.results[0] as ProcessedSearchResult;
       expect(result1.path).toBe('file1.md');
       expect(result1.title).toBe('File 1');
       expect(result1.preview).toContain('This is the content');
-      expect(result1.preview.length).toBeLessThanOrEqual(203); // 200 + '...'
+      expect(result1.preview!.length).toBeLessThanOrEqual(203); // 200 + '...'
       expect(result1.contentHash).toBeDefined();
       expect(result1.contentLength).toBe(73);
       expect(result1.score).toBe(0.9);
@@ -108,8 +127,8 @@ describe('Response Limiter', () => {
       expect(limited.results.length).toBeLessThan(1000);
       
       // Verify all results have truncated content
-      for (const result of limited.results) {
-        expect(result.preview.length).toBeLessThanOrEqual(203);
+      for (const result of limited.results as ProcessedSearchResult[]) {
+        expect(result.preview!.length).toBeLessThanOrEqual(203);
       }
     });
 
@@ -130,9 +149,9 @@ describe('Response Limiter', () => {
       const limited = limitSearchResults(results);
       
       expect(limited.results).toHaveLength(2);
-      expect(limited.results[0].preview).toBeUndefined();
-      expect(limited.results[1].title).toBe('file2');
-      expect(limited.results[1].preview).toBe('Some context');
+      expect((limited.results[0] as ProcessedSearchResult).preview).toBeUndefined();
+      expect((limited.results[1] as ProcessedSearchResult).title).toBe('file2');
+      expect((limited.results[1] as ProcessedSearchResult).preview).toBe('Some context');
     });
   });
 
@@ -144,7 +163,7 @@ describe('Response Limiter', () => {
     });
 
     it('should limit large object responses', () => {
-      const response: any = {
+      const response: unknown = {
         error: 'test error',
         message: 'important message',
         data: 'x'.repeat(100000) // Very large data
@@ -153,7 +172,7 @@ describe('Response Limiter', () => {
       const limited = limitResponse(response, {
         ...DEFAULT_LIMITER_CONFIG,
         maxTokens: 100
-      });
+      }) as TruncatedObjectResponse;
 
       expect(limited.error).toBe('test error');
       expect(limited.message).toBe('important message');
@@ -170,7 +189,7 @@ describe('Response Limiter', () => {
       const limited = limitResponse(response, {
         ...DEFAULT_LIMITER_CONFIG,
         maxTokens: 500
-      });
+      }) as unknown[];
 
       expect(Array.isArray(limited)).toBe(true);
       expect(limited.length).toBeLessThan(1000);
